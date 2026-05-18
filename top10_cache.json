@@ -1,0 +1,474 @@
+{
+  "timestamp": 1779039242952,
+  "movies": [
+    {
+      "adult": false,
+      "backdrop_path": "/zMwhWailP1WY7sb6AoE6b8ugoy.jpg",
+      "genre_ids": [
+        16,
+        10751,
+        12,
+        14
+      ],
+      "id": 1007757,
+      "title": "Swapped",
+      "original_language": "en",
+      "original_title": "Swapped",
+      "overview": "A small woodland creature and a majestic bird, two natural sworn enemies of the Valley, magically trade places and set off on an adventure of a lifetime to switch back. Their journey soon uncovers a greater threat—one that could endanger not only their species, but the entire valley they call home.",
+      "popularity": 396.9951,
+      "poster_path": "/te3zACrsYkS2x3mkjG6htLqhMo4.jpg",
+      "release_date": "2026-05-01",
+      "softcore": false,
+      "video": false,
+      "vote_average": 9,
+      "vote_count": 1051,
+      "media_type": "movie",
+      "netflix_rank": 1,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/p8777bPIlyFYcjqP2hU8htoz1RG.jpg",
+      "genre_ids": [
+        28,
+        53
+      ],
+      "id": 1318447,
+      "title": "Apex",
+      "original_language": "en",
+      "original_title": "Apex",
+      "overview": "A grieving woman pushing her limits on a solo adventure in the Australian wild is ensnared in a twisted game with a cunning killer who thinks she's prey.",
+      "popularity": 251.7897,
+      "poster_path": "/eTp7gSPkSF3Aw79mNx1NkBP1PZT.jpg",
+      "release_date": "2026-04-24",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.626,
+      "vote_count": 1032,
+      "media_type": "movie",
+      "netflix_rank": 2,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/evo3crueRIK9Eutb3lnDLVbD2xD.jpg",
+      "genre_ids": [
+        28,
+        53,
+        27
+      ],
+      "id": 514847,
+      "title": "The Hunt",
+      "original_language": "en",
+      "original_title": "The Hunt",
+      "overview": "Twelve strangers wake up in a clearing. They don't know where they are—or how they got there. In the shadow of a dark internet conspiracy theory, ruthless elitists gather at a remote location to hunt humans for sport. But their master plan is about to be derailed when one of the hunted turns the tables on her pursuers.",
+      "popularity": 32.9161,
+      "poster_path": "/wxPhn4ef1EAo5njxwBkAEVrlJJG.jpg",
+      "release_date": "2020-03-11",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.6,
+      "vote_count": 3628,
+      "media_type": "movie",
+      "netflix_rank": 3,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/oIJjO1CvEdTMFNkWfHaV0RB584G.jpg",
+      "genre_ids": [
+        28,
+        80,
+        53
+      ],
+      "id": 628847,
+      "title": "Trap House",
+      "original_language": "en",
+      "original_title": "Trap House",
+      "overview": "An undercover DEA agent and his partner embark on a game of cat and mouse with an audacious, and surprising group of thieves – their own rebellious teenagers, who have begun robbing from a dangerous cartel, using their parents' tactics and top-secret intel to do it.",
+      "popularity": 8.0477,
+      "poster_path": "/6tpAPeuuqbVnYWWPoOLEDLSBU7a.jpg",
+      "release_date": "2025-11-14",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.566,
+      "vote_count": 259,
+      "media_type": "movie",
+      "netflix_rank": 4,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/tAh0dkZiOSICkRlv9wXOsvcNl4s.jpg",
+      "genre_ids": [
+        10749,
+        18,
+        35
+      ],
+      "id": 1241693,
+      "title": "Do Deewane Seher Mein",
+      "original_language": "hi",
+      "original_title": "दो दीवाने शहर में",
+      "overview": "Two socially awkward millennials in Mumbai find love while struggling with self-acceptance. As they battle insecurities and societal pressure, their journey takes them from city chaos to mountain serenity.",
+      "popularity": 5.8635,
+      "poster_path": "/pJu9oL6ElIaajAjwgoKyUCM319H.jpg",
+      "release_date": "2026-02-20",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.3,
+      "vote_count": 10,
+      "media_type": "movie",
+      "netflix_rank": 5,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/3gI8gS7YIpmEzUehg3cZVQ62phl.jpg",
+      "genre_ids": [
+        35,
+        80,
+        28
+      ],
+      "id": 1416391,
+      "title": "Toaster",
+      "original_language": "hi",
+      "original_title": "टोस्टर",
+      "overview": "Murder and chaos erupt when a miser becomes obsessed with a toaster he gave as a wedding gift.",
+      "popularity": 5.1393,
+      "poster_path": "/8bsa86WKaQ9plaYN7rd9oGwmyVV.jpg",
+      "release_date": "2026-04-15",
+      "softcore": false,
+      "video": false,
+      "vote_average": 5.3,
+      "vote_count": 22,
+      "media_type": "movie",
+      "netflix_rank": 6,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/yrsWvYxnmA7ntxZtO9K0OInjyRA.jpg",
+      "genre_ids": [
+        12,
+        18
+      ],
+      "id": 1423251,
+      "title": "Biker",
+      "original_language": "te",
+      "original_title": "బైకర్",
+      "overview": "A seasoned motocross rider returns to the grueling sport he once abandoned, confronting fierce competition and a father who might push him to the brink.",
+      "popularity": 3.0661,
+      "poster_path": "/cKuFTk3qqrASg2nopJwDdeAroeF.jpg",
+      "release_date": "2026-04-03",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.25,
+      "vote_count": 4,
+      "media_type": "movie",
+      "netflix_rank": 7,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/zOpe0eHsq0A2NvNyBbtT6sj53qV.jpg",
+      "genre_ids": [
+        28,
+        878,
+        35,
+        10751
+      ],
+      "id": 939243,
+      "title": "Sonic the Hedgehog 3",
+      "original_language": "en",
+      "original_title": "Sonic the Hedgehog 3",
+      "overview": "Sonic, Knuckles, and Tails reunite against a powerful new adversary, Shadow, a mysterious villain with powers unlike anything they have faced before. With their abilities outmatched in every way, Team Sonic must seek out an unlikely alliance in hopes of stopping Shadow and protecting the planet.",
+      "popularity": 21.2434,
+      "poster_path": "/d8Ryb8AunYAuycVKDp5HpdWPKgC.jpg",
+      "release_date": "2024-12-19",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.615,
+      "vote_count": 3262,
+      "media_type": "movie",
+      "netflix_rank": 8,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/4DfxcN4w0FuYZHQ3JAHzpHWia1U.jpg",
+      "genre_ids": [
+        28,
+        80,
+        53
+      ],
+      "id": 1291608,
+      "title": "Dhurandhar",
+      "original_language": "hi",
+      "original_title": "धुरंधर",
+      "overview": "A mysterious traveler slips into the heart of Karachi's underbelly and rises through its ranks with lethal precision, only to tear the notorious ISI-Underworld nexus apart from within.",
+      "popularity": 17.8734,
+      "poster_path": "/8FHOtUpNIk5ZPEay2N2EY5lrxkv.jpg",
+      "release_date": "2025-12-05",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.108,
+      "vote_count": 273,
+      "media_type": "movie",
+      "netflix_rank": 9,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/zIOBTZAqGwdKnOb5c6SvzxP7x86.jpg",
+      "genre_ids": [
+        53,
+        10749
+      ],
+      "id": 1446616,
+      "title": "Tu Yaa Main",
+      "original_language": "hi",
+      "original_title": "तू या मैं",
+      "overview": "A wannabe rapper from the outskirts of Mumbai and an affluent influencer elope to a coastal town, only to find themselves trapped in the pool of a derelict resort fighting for survival against the wrath of a ferocious crocodile.",
+      "popularity": 20.7771,
+      "poster_path": "/nUPnA0I1MTaZRVCsUQc5DS5JA8W.jpg",
+      "release_date": "2026-02-11",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.378,
+      "vote_count": 37,
+      "media_type": "movie",
+      "netflix_rank": 10,
+      "netflix_weeks": null
+    }
+  ],
+  "tv": [
+    {
+      "adult": false,
+      "backdrop_path": "/o9rD068PXoATK5H5Z3W2sJ4fA60.jpg",
+      "genre_ids": [
+        18,
+        9648,
+        10759
+      ],
+      "id": 283657,
+      "origin_country": [
+        "IN"
+      ],
+      "original_language": "hi",
+      "original_name": "ग्लोरी",
+      "overview": "In a small-town boxing hub, two brothers investigate a shocking murder while navigating a troubled reunion with their father, a renowned coach.",
+      "popularity": 17.3276,
+      "poster_path": "/juAQ7fFQGu2n3A2gW5tfNub1cW8.jpg",
+      "first_air_date": "2026-05-01",
+      "softcore": false,
+      "name": "Glory",
+      "vote_average": 5.875,
+      "vote_count": 4,
+      "media_type": "tv",
+      "netflix_rank": 1,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/zV9WYOfFr4MAnzXXD8PR5J6JnN3.jpg",
+      "genre_ids": [
+        9648,
+        18
+      ],
+      "id": 285838,
+      "origin_country": [
+        "KR"
+      ],
+      "original_language": "ko",
+      "original_name": "기리고",
+      "overview": "A mysterious app promises wishes — then starts a countdown to death. As a group of teens becomes entangled, they must break the deadly chain to survive.",
+      "popularity": 42.6402,
+      "poster_path": "/2CfTNVaR8kZQkWtWWE3Cntaiq33.jpg",
+      "first_air_date": "2026-04-24",
+      "softcore": false,
+      "name": "If Wishes Could Kill",
+      "vote_average": 8.07,
+      "vote_count": 93,
+      "media_type": "tv",
+      "netflix_rank": 2,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/dMCfHJRnAZfKoPTjYyZk2QCL8au.jpg",
+      "genre_ids": [
+        10759,
+        80
+      ],
+      "id": 223386,
+      "origin_country": [
+        "US"
+      ],
+      "original_language": "en",
+      "original_name": "Man on Fire",
+      "overview": "Haunted by his past and hunted by his enemies, a Special Forces veteran fights to keep a teenage girl alive on the deadly streets of Rio de Janeiro.",
+      "popularity": 36.8617,
+      "poster_path": "/9cZzmT8rhBXbZ1QFBPs3ggABYB3.jpg",
+      "first_air_date": "2026-04-30",
+      "softcore": false,
+      "name": "Man on Fire",
+      "vote_average": 7.043,
+      "vote_count": 117,
+      "media_type": "tv",
+      "netflix_rank": 3,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/zhsEnDNCQX5dlI2wbKzV90pV0B9.jpg",
+      "genre_ids": [
+        18,
+        10759,
+        80
+      ],
+      "id": 127529,
+      "origin_country": [
+        "KR"
+      ],
+      "original_language": "ko",
+      "original_name": "사냥개들",
+      "overview": "Faced with ruthless foes with a violent thirst, two young boxers band together — risking life and limb to bring justice and protect their loved ones.",
+      "popularity": 61.5292,
+      "poster_path": "/uSQzD7TXsL96J5ggDrJFdUs8uXU.jpg",
+      "first_air_date": "2023-06-09",
+      "softcore": false,
+      "name": "Bloodhounds",
+      "vote_average": 8.435,
+      "vote_count": 673,
+      "media_type": "tv",
+      "netflix_rank": 4,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/w8L2oVjsSRZdZ1Wcszot9cKZMRO.jpg",
+      "genre_ids": [
+        10767,
+        35
+      ],
+      "id": 247769,
+      "origin_country": [
+        "IN"
+      ],
+      "original_language": "hi",
+      "original_name": "द ग्रेट इंडियन कपिल शो",
+      "overview": "Comedian Kapil Sharma hosts this laugh-out-loud variety talk show with celebrity guests, hilarious antics and his signature supporting cast.",
+      "popularity": 6.9729,
+      "poster_path": "/3KMCmGDlYLlJ8zGOhCs6f3FZcnj.jpg",
+      "first_air_date": "2024-03-30",
+      "softcore": false,
+      "name": "The Great Indian Kapil Show",
+      "vote_average": 7.9,
+      "vote_count": 14,
+      "media_type": "tv",
+      "netflix_rank": 5,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/2vWxGsPxoDYnnNqsq8jlv1wiFJj.jpg",
+      "genre_ids": [
+        35,
+        18
+      ],
+      "id": 246483,
+      "origin_country": [
+        "IN"
+      ],
+      "original_language": "hi",
+      "original_name": "मामला लीगल है",
+      "overview": "Chaos collides with the letter of the law at District Court Patparganj, where quirky employees work to uphold justice — but not without a few objections.",
+      "popularity": 4.6025,
+      "poster_path": "/A9krYovvsiUXcQLOnQ2O53MHVwd.jpg",
+      "first_air_date": "2024-03-01",
+      "softcore": false,
+      "name": "Maamla Legal Hai",
+      "vote_average": 7.8,
+      "vote_count": 26,
+      "media_type": "tv",
+      "netflix_rank": 6,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/5WOikKpCZ5H0zEzVDeE6eJwA8BH.jpg",
+      "genre_ids": [
+        80,
+        9648,
+        18
+      ],
+      "id": 308482,
+      "origin_country": [
+        "IN"
+      ],
+      "original_language": "hi",
+      "original_name": "तस्करी: द स्मगलर्स वेब",
+      "overview": "A dedicated customs officer and his team take on a notorious smuggler leading a powerful syndicate, but unexpected obstacles threaten their mission.",
+      "popularity": 3.9003,
+      "poster_path": "/25fKRXvQLBq4nXu9vjOVJcvCiiD.jpg",
+      "first_air_date": "2026-01-14",
+      "softcore": false,
+      "name": "Taskaree: The Smuggler's Web",
+      "vote_average": 7,
+      "vote_count": 21,
+      "media_type": "tv",
+      "netflix_rank": 7,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/qD211Hb5XwFxrszzBBe5EUYJerh.jpg",
+      "genre_ids": [
+        10759,
+        10765
+      ],
+      "id": 111110,
+      "origin_country": [
+        "US"
+      ],
+      "original_language": "en",
+      "original_name": "ONE PIECE",
+      "overview": "With his straw hat and ragtag crew, young pirate Monkey D. Luffy goes on an epic voyage for treasure.",
+      "popularity": 31.3076,
+      "poster_path": "/blWCPEqDGLBuLB9u89CxP9ORQP4.jpg",
+      "first_air_date": "2023-08-31",
+      "softcore": false,
+      "name": "ONE PIECE",
+      "vote_average": 8.113,
+      "vote_count": 1744,
+      "media_type": "tv",
+      "netflix_rank": 8,
+      "netflix_weeks": null
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/dL5mViE22ZHnhrUU9wlklzIU4Iy.jpg",
+      "genre_ids": [
+        35,
+        18
+      ],
+      "id": 287011,
+      "origin_country": [
+        "KR"
+      ],
+      "original_language": "ko",
+      "original_name": "오늘도 매진했습니다",
+      "overview": "A work-obsessed cosmetics CEO and a top home-shopping host struggling with insomnia cross paths, and through an unexpected romance, begin to heal the emptiness in their lives.",
+      "popularity": 26.8532,
+      "poster_path": "/bcnneY1DWQzmwfvsuhGGnwv9KYD.jpg",
+      "first_air_date": "2026-04-22",
+      "softcore": false,
+      "name": "Sold Out on You",
+      "vote_average": 7.7,
+      "vote_count": 10,
+      "media_type": "tv",
+      "netflix_rank": 10,
+      "netflix_weeks": null
+    }
+  ]
+}

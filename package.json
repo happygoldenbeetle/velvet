@@ -1,0 +1,20 @@
+{
+  "name": "cinemax",
+  "version": "1.0.0",
+  "description": "A Netflix-inspired media browser built with Electron",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": [
+    "electron",
+    "media",
+    "browser"
+  ],
+  "author": "Abdullah",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.7.5"
+  }
+}

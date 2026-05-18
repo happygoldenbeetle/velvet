@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cinemax</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Custom Title Bar                        -->
+  <!-- ═══════════════════════════════════════ -->
+  <div class="titlebar" id="titlebar">
+    <div class="titlebar-drag"></div>
+    <div class="titlebar-controls">
+      <button class="titlebar-btn" id="btn-minimize" title="Minimize">
+        <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="2" rx="1" fill="currentColor"/></svg>
+      </button>
+      <button class="titlebar-btn" id="btn-maximize" title="Maximize">
+        <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      </button>
+      <button class="titlebar-btn titlebar-btn-close" id="btn-close" title="Close">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Navigation Bar                          -->
+  <!-- ═══════════════════════════════════════ -->
+  <nav class="navbar" id="navbar">
+    <div class="nav-left">
+      <a href="#" class="nav-link active" data-page="home" id="nav-home">
+        <svg width="16" height="16" viewBox="-2 -2 24 24" fill="currentColor"><path d='M18 18V7.132l-8-4.8-8 4.8V18h4v-2.75a4 4 0 1 1 8 0V18h4zm-6 2v-4.75a2 2 0 1 0-4 0V20H2a2 2 0 0 1-2-2V7.132a2 2 0 0 1 .971-1.715l8-4.8a2 2 0 0 1 2.058 0l8 4.8A2 2 0 0 1 20 7.132V18a2 2 0 0 1-2 2h-6z'/></svg>
+        Home
+      </a>
+      <a href="#" class="nav-link" data-page="movies" id="nav-movies">
+        <svg width="16" height="16" viewBox="-2 -2 24 24" fill="currentColor"><path d='M6 15v3h8v-7H6v4zm-2-2v-2H2V9h2V7H2v6h2zm0 2H2v1a2 2 0 0 0 2 2v-3zm14-2V7h-2v2h2v2h-2v2h2zm0 2h-2v3a2 2 0 0 0 2-2v-1zm-4-8V2H6v7h8V7zm4-2V4a2 2 0 0 0-2-2v3h2zM4 5V2a2 2 0 0 0-2 2v1h2zm0-5h12a4 4 0 0 1 4 4v12a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z'/></svg>
+        Movies
+      </a>
+      <a href="#" class="nav-link" data-page="tvshows" id="nav-tvshows">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M6.624.334a.75.75 0 00-1.248.832L6.599 3H2.25A2.25 2.25 0 000 5.25v7.5A2.25 2.25 0 002.25 15h11.5A2.25 2.25 0 0016 12.75v-7.5A2.25 2.25 0 0013.75 3H9.401l1.223-1.834A.75.75 0 109.376.334L8 2.398 6.624.334zM7.989 4.5a.798.798 0 00.022 0h5.739a.75.75 0 01.75.75v7.5a.75.75 0 01-.75.75H2.25a.75.75 0 01-.75-.75v-7.5a.75.75 0 01.75-.75h5.739z" clip-rule="evenodd"/></svg>
+        TV Shows
+      </a>
+      <a href="#" class="nav-link" data-page="anime" id="nav-anime">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6v15M19 6v15M7 6c0 3 2 5 5 5s5-2 5-5M6 14h12"/></svg>
+        Anime
+      </a>
+      <a href="#" class="nav-link" data-page="manga" id="nav-manga">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m8 3.75c-1.75-1-2.25-1-6.25-1v9.5c4 0 4.5 0 6.25 1 1.75-1 3.25-1 6.25-1v-9.5c-4 0-4.5 0-6.25 1z"/><path d="m8 4.25v8.5"/></svg>
+        Manga
+      </a>
+      <a href="#" class="nav-link" data-page="mylist" id="nav-mylist">
+        <svg width="16" height="16" viewBox="-5 -2 24 24" fill="currentColor"><path d='M3 2a1 1 0 0 0-1 1v15l2.978-2.717a3 3 0 0 1 4.044 0L12 18V3a1 1 0 0 0-1-1H3zm0-2h8a3 3 0 0 1 3 3v15a2 2 0 0 1-3.348 1.477L7.674 16.76a1 1 0 0 0-1.348 0l-2.978 2.717A2 2 0 0 1 0 18V3a3 3 0 0 1 3-3z'/></svg>
+        My List
+      </a>
+      <a href="#" class="nav-link" data-page="downloads" id="nav-downloads">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Downloads
+      </a>
+    </div>
+    <div class="nav-right">
+      <div class="search-container" id="search-container">
+        <button class="search-toggle" id="search-toggle">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+          </svg>
+        </button>
+        <input type="text" class="search-input" id="search-input" placeholder="Titles, people, genres" autocomplete="off" />
+      </div>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Main Content Area                       -->
+  <!-- ═══════════════════════════════════════ -->
+  <main class="main-content" id="main-content">
+    <!-- Hero Banner -->
+    <section class="hero" id="hero">
+      <div class="hero-backdrop" id="hero-backdrop"></div>
+      <div class="hero-gradient"></div>
+      <div class="hero-content" id="hero-content">
+        <div class="hero-title-block" id="hero-title-block">
+          <div class="hero-logo" id="hero-logo" aria-hidden="true"></div>
+          <h1 class="hero-title" id="hero-title"></h1>
+        </div>
+        <p class="hero-overview" id="hero-overview"></p>
+        <div class="hero-meta" id="hero-meta"></div>
+        <div class="hero-actions">
+          <button class="btn btn-play" id="hero-play">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.54,9,8.88,3.46a3.42,3.42,0,0,0-5.13,3V17.58A3.42,3.42,0,0,0,7.17,21a3.43,3.43,0,0,0,1.71-.46L18.54,15a3.42,3.42,0,0,0,0-5.92Z"/></svg>
+            Play
+          </button>
+          <button class="btn btn-info" id="hero-info">
+            <svg width="20" height="20" viewBox="-2 -2 24 24" fill="currentColor"><path d='M10 20C4.477 20 0 15.523 0 10S4.477 0 10 0s10 4.477 10 10-4.477 10-10 10zm0-2a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm0-10a1 1 0 0 1 1 1v5a1 1 0 0 1-2 0V9a1 1 0 0 1 1-1zm0-1a1 1 0 1 1 0-2 1 1 0 0 1 0 2z'/></svg>
+            More Info
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Content Rows -->
+    <div class="content-rows" id="content-rows">
+      <!-- Rows will be dynamically injected here -->
+    </div>
+  </main>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Detail Modal                            -->
+  <!-- ═══════════════════════════════════════ -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" id="detail-modal">
+      <div class="modal-backdrop" id="modal-backdrop"></div>
+      <div class="modal-gradient"></div>
+      <button class="modal-close" id="modal-close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+      <div class="modal-content" id="modal-content">
+        <div class="modal-title-block" id="modal-title-block">
+          <div class="modal-logo" id="modal-logo" aria-hidden="true"></div>
+          <h2 class="modal-title" id="modal-title"></h2>
+        </div>
+        <div class="modal-meta" id="modal-meta"></div>
+        <div class="modal-actions">
+          <button class="btn btn-play" id="modal-play">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.54,9,8.88,3.46a3.42,3.42,0,0,0-5.13,3V17.58A3.42,3.42,0,0,0,7.17,21a3.43,3.43,0,0,0,1.71-.46L18.54,15a3.42,3.42,0,0,0,0-5.92Z"/></svg>
+            <span>Play Now</span>
+          </button>
+          <button class="btn btn-list" id="modal-list" title="Add to My List">
+            <svg width="18" height="18" viewBox="-5 -2 24 24" fill="currentColor"><path d='M3 2a1 1 0 0 0-1 1v15l2.978-2.717a3 3 0 0 1 4.044 0L12 18V3a1 1 0 0 0-1-1H3zm0-2h8a3 3 0 0 1 3 3v15a2 2 0 0 1-3.348 1.477L7.674 16.76a1 1 0 0 0-1.348 0l-2.978 2.717A2 2 0 0 1 0 18V3a3 3 0 0 1 3-3z'/></svg>
+            <span>My List</span>
+          </button>
+          <button class="btn btn-download" id="modal-download" title="Download for offline viewing" style="display:none;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span id="modal-download-label">Download</span>
+          </button>
+        </div>
+        <p class="modal-overview" id="modal-overview"></p>
+        <div class="modal-details" id="modal-details"></div>
+        <!-- Season/Episode picker for TV shows -->
+        <div class="season-picker" id="season-picker" style="display:none;">
+          <h3>Episodes</h3>
+          <select class="season-select" id="season-select"></select>
+          <div class="episode-list" id="episode-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Video Player (hidden by default)        -->
+  <!-- ═══════════════════════════════════════ -->
+  <div class="player-overlay" id="player-overlay" style="display:none;">
+    <div class="player-header">
+      <div class="player-header-left">
+        <button class="player-back" id="player-back">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+        </button>
+        <span class="player-title" id="player-title"></span>
+      </div>
+      <div class="player-header-right" id="player-episodes-toggle-container" style="display:none;">
+        <button class="player-episodes-btn" id="player-episodes-toggle">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/></svg>
+          Episodes
+        </button>
+      </div>
+    </div>
+    <div class="player-body">
+      <webview class="player-webview" id="player-webview" allowfullscreen></webview>
+      <video class="player-local-video" id="player-local-video" controls playsinline preload="metadata"></video>
+      <div class="player-episodes-panel" id="player-episodes-panel">
+        <div class="player-episodes-header">
+          <h3>Episodes</h3>
+          <button class="player-episodes-close" id="player-episodes-close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <select class="season-select" id="player-season-select"></select>
+        <div class="episode-list" id="player-episode-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Loading Spinner                         -->
+  <!-- ═══════════════════════════════════════ -->
+  <div class="reader-overlay" id="reader-overlay" style="display:none;">
+    <div class="reader-header">
+      <div class="reader-header-left">
+        <button class="reader-back" id="reader-back">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+        </button>
+        <div class="reader-title-wrap">
+          <span class="reader-title" id="reader-title"></span>
+          <span class="reader-subtitle" id="reader-subtitle"></span>
+        </div>
+      </div>
+      <div class="reader-header-right">
+        <button class="reader-chapters-btn" id="reader-chapters-toggle">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          Chapters
+        </button>
+      </div>
+    </div>
+    <div class="reader-body">
+      <div class="reader-scroll" id="reader-scroll">
+        <div class="reader-status" id="reader-status">Loading chapter...</div>
+        <div class="reader-pages" id="reader-pages"></div>
+      </div>
+      <div class="reader-chapters-panel" id="reader-chapters-panel">
+        <div class="reader-chapters-header">
+          <h3>Chapters</h3>
+          <button class="reader-chapters-close" id="reader-chapters-close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="episode-list reader-chapters-list" id="reader-chapter-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="loading-screen" id="loading-screen">
+    <div class="loader">
+      <div class="loader-mark" aria-hidden="true"></div>
+      <span class="loader-logo">VELVET</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Search Results Page                     -->
+  <!-- ═══════════════════════════════════════ -->
+  <div class="search-results-page" id="search-results-page" style="display:none;">
+    <div class="search-results-header">
+      <button class="search-results-back" id="search-results-back" aria-label="Back from search results">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        <span>Back</span>
+      </button>
+      <h2 class="search-results-title" id="search-results-title"></h2>
+    </div>
+    <div class="search-results-grid" id="search-results-grid"></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Toast Notification Container            -->
+  <!-- ═══════════════════════════════════════ -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
