@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain } = require("electron");
+const { app, BrowserWindow, session, ipcMain, dialog, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn, spawnSync } = require("child_process");
@@ -346,6 +346,63 @@ function getResolvedFfmpegPath() {
 function getResolvedYtDlpPath() {
   if (fs.existsSync(BUNDLED_YTDLP_PATH)) return BUNDLED_YTDLP_PATH;
   return findFirstOnPath("yt-dlp");
+}
+
+function getExternalDownloaderExecutable(folderPath) {
+  if (!folderPath) return { exists: false, reason: "no_folder" };
+  let entries;
+  try {
+    entries = fs.readdirSync(folderPath);
+  } catch (err) {
+    return {
+      exists: false,
+      reason: err?.code === "EACCES" ? "folder_permission" : "folder_unreadable",
+    };
+  }
+
+  if (!entries.includes("_internal")) {
+    return { exists: false, reason: "no_internal" };
+  }
+
+  const binary = entries.find((entry) => {
+    if (entry === "_internal" || entry.startsWith(".")) return false;
+    try {
+      const stat = fs.statSync(path.join(folderPath, entry));
+      if (!stat.isFile()) return false;
+      return process.platform === "win32" ? entry.toLowerCase().endsWith(".exe") : Boolean(stat.mode & 0o111);
+    } catch {
+      return false;
+    }
+  });
+
+  if (!binary) return { exists: false, reason: "no_executable" };
+  return { exists: true, binaryPath: path.join(folderPath, binary) };
+}
+
+function findLatestVideoFile(folderPath, preferredStem = "") {
+  try {
+    const VIDEO_EXTS = [".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".ts"];
+    const normalizedStem = preferredStem.trim().toLowerCase();
+    const candidates = fs
+      .readdirSync(folderPath)
+      .filter((fileName) => VIDEO_EXTS.includes(path.extname(fileName).toLowerCase()))
+      .map((fileName) => {
+        const absolutePath = path.join(folderPath, fileName);
+        return {
+          absolutePath,
+          fileName,
+          mtimeMs: fs.statSync(absolutePath).mtimeMs,
+          preferred: normalizedStem ? fileName.toLowerCase().startsWith(normalizedStem) : false,
+        };
+      })
+      .sort((a, b) => {
+        if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
+        return b.mtimeMs - a.mtimeMs;
+      });
+    return candidates[0]?.absolutePath || null;
+  } catch {
+    return null;
+  }
 }
 
 // Track active download jobs so they can be cancelled
@@ -905,6 +962,119 @@ ipcMain.on("download-cancel", (_event, downloadId) => {
   }
 });
 
+ipcMain.handle("downloads-pick-folder", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openDirectory"],
+    title: "Select Folder",
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("downloads-check-external-tool", (_event, folderPath) => {
+  return getExternalDownloaderExecutable(folderPath);
+});
+
+ipcMain.handle("downloads-show-in-folder", (_event, filePath) => {
+  try {
+    if (filePath && fs.existsSync(filePath)) {
+      shell.showItemInFolder(filePath);
+      return { success: true };
+    }
+    return { success: false, error: "File not found." };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+function parseExternalDownloaderLine(line, previous = {}) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed) return null;
+
+  const update = {};
+
+  const fragMatch = trimmed.match(/\(frag\s+(\d+)\/(\d+)\)/i);
+  if (fragMatch) {
+    const completedFragments = Number.parseInt(fragMatch[1], 10);
+    const totalFragments = Number.parseInt(fragMatch[2], 10);
+    update.completedFragments = completedFragments;
+    update.totalFragments = totalFragments;
+    update.progress = Math.min(99, Math.round((completedFragments / Math.max(totalFragments, 1)) * 100));
+    update.message = `Fragment ${completedFragments} / ${totalFragments}`;
+  }
+
+  const totalFragmentsMatch = trimmed.match(/Total fragments:\s*(\d+)/i);
+  if (totalFragmentsMatch) {
+    update.totalFragments = Number.parseInt(totalFragmentsMatch[1], 10);
+    update.completedFragments = previous.completedFragments || 0;
+    update.message = `HLS: ${update.totalFragments} fragments`;
+  }
+
+  const directPercentMatch = trimmed.match(/^\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+\s*(?:[KMGT]i?B|B))/i);
+  if (directPercentMatch) {
+    update.progress = Math.min(99, Math.round(Number.parseFloat(directPercentMatch[1])));
+    update.size = directPercentMatch[2].trim();
+    const speedMatch = trimmed.match(/\bat\s+([\d.]+\s*(?:[KMGT]i?B|B)\/s)/i);
+    if (speedMatch) update.speed = speedMatch[1].trim();
+    update.message = `${update.progress}% of ${update.size}`;
+  }
+
+  const ffmpegDurationMatch = trimmed.match(/Duration:\s*(\d+):(\d+):([\d.]+)/i);
+  if (ffmpegDurationMatch) {
+    const totalSeconds =
+      Number.parseInt(ffmpegDurationMatch[1], 10) * 3600 +
+      Number.parseInt(ffmpegDurationMatch[2], 10) * 60 +
+      Number.parseFloat(ffmpegDurationMatch[3]);
+    if (totalSeconds > 0) update.totalSeconds = totalSeconds;
+  }
+
+  const ffmpegProgressMatch = trimmed.match(/size=\s*([\d.]+\s*\w+)\s+time=(\d+):(\d+):([\d.]+)/i);
+  if (ffmpegProgressMatch) {
+    const elapsedSeconds =
+      Number.parseInt(ffmpegProgressMatch[2], 10) * 3600 +
+      Number.parseInt(ffmpegProgressMatch[3], 10) * 60 +
+      Number.parseFloat(ffmpegProgressMatch[4]);
+    const totalSeconds = previous.totalSeconds || 0;
+    if (totalSeconds > 0) {
+      update.progress = Math.min(99, Math.round((elapsedSeconds / totalSeconds) * 100));
+    }
+    update.size = ffmpegProgressMatch[1].trim();
+    const speedMatch = trimmed.match(/speed=\s*([\d.]+)x/i);
+    if (speedMatch) update.speed = `${speedMatch[1]}x`;
+    update.message = `Processing${update.size ? ` ${update.size}` : ""}${update.speed ? ` at ${update.speed}` : ""}`;
+  }
+
+  const destinationMatch = trimmed.match(/^\[download\]\s+Destination:\s+(.+)/i);
+  if (destinationMatch) {
+    update.outputPath = destinationMatch[1].trim();
+    update.message = "Downloading...";
+  }
+
+  const mergeMatch = trimmed.match(/\[Merger\]\s+Merging formats into\s+\"(.+)\"/i);
+  if (mergeMatch) {
+    update.outputPath = mergeMatch[1].trim();
+    update.progress = 99;
+    update.phase = "assembling";
+    update.message = "Merging video...";
+  }
+
+  const retryMatch = trimmed.match(/Retrying\s+\((\d+)\/(\d+)\)/i);
+  if (retryMatch) {
+    update.message = `Retrying... (${retryMatch[1]}/${retryMatch[2]})`;
+  } else if (/timed?\s*out/i.test(trimmed)) {
+    update.message = "Retrying after timeout...";
+  }
+
+  if (!update.message && !update.outputPath) {
+    const suppressed =
+      /^\[debug\]/i.test(trimmed) ||
+      /^\[yt-dlp\s+DEBUG\]/i.test(trimmed) ||
+      /Sleeping\s+[\d.]+\s+seconds/i.test(trimmed);
+    if (!suppressed) update.message = trimmed;
+  }
+
+  return Object.keys(update).length ? update : null;
+}
+
 function parseYtDlpProgressLine(line) {
   if (!line.startsWith("DL:")) return null;
   const parts = line.slice(3).split("|");
@@ -932,6 +1102,173 @@ function parseYtDlpProgressLine(line) {
     percent,
   };
 }
+
+ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourceUrl, outputPath, title = "" }) => {
+  try {
+    if (!binaryPath || !fs.existsSync(binaryPath)) {
+      const error = "The selected downloader executable could not be found.";
+      errorDownload("external", error, { downloadId, binaryPath });
+      return { success: false, error };
+    }
+
+    const downloadPath = path.dirname(outputPath);
+    fs.mkdirSync(downloadPath, { recursive: true });
+
+    const safeTitle = path.basename(title || path.parse(outputPath).name || "download").trim();
+    const args = [
+      "--cli",
+      sourceUrl,
+      "-f",
+      "mp4 (with Audio)",
+      "-r",
+      "best",
+      "-b",
+      "320",
+      "-n",
+      safeTitle,
+      "-d",
+      downloadPath,
+    ];
+
+    logDownload("external", "Starting external downloader.", {
+      downloadId,
+      binaryPath,
+      sourceUrl,
+      outputPath,
+      args,
+    });
+
+    const proc = spawn(binaryPath, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    const job = activeSegmentJobs.get(downloadId) || {
+      cancelled: false,
+      currentReq: null,
+      currentProc: null,
+    };
+    job.currentProc = proc;
+    activeSegmentJobs.set(downloadId, job);
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+    let parserState = {
+      totalFragments: 0,
+      completedFragments: 0,
+      totalSeconds: 0,
+      outputPath: "",
+    };
+
+    const emitProgress = (update) => {
+      event.sender.send("downloads-progress", {
+        downloadId,
+        phase: update.phase || "downloading",
+        progress: update.progress ?? null,
+        speed: update.speed ?? null,
+        size: update.size ?? null,
+        completedFragments: update.completedFragments ?? parserState.completedFragments ?? null,
+        totalFragments: update.totalFragments ?? parserState.totalFragments ?? null,
+        message: update.message || "",
+        outputPath: update.outputPath || parserState.outputPath || null,
+      });
+    };
+
+    const consumeLine = (line, source) => {
+      const trimmed = String(line || "").trim();
+      if (!trimmed) return;
+
+      if (source === "stderr") {
+        warnDownload("external", "External downloader stderr.", { downloadId, line: trimmed });
+      } else {
+        logDownload("external", "External downloader stdout.", { downloadId, line: trimmed });
+      }
+
+      const update = parseExternalDownloaderLine(trimmed, parserState);
+      if (!update) return;
+      parserState = { ...parserState, ...update };
+      emitProgress(update);
+    };
+
+    proc.stdout.on("data", (chunk) => {
+      stdoutBuffer += chunk.toString();
+      const parts = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = parts.pop() || "";
+      parts.forEach((line) => consumeLine(line, "stdout"));
+    });
+
+    proc.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderrBuffer += text;
+      text.split(/\r?\n/).forEach((line) => consumeLine(line, "stderr"));
+    });
+
+    proc.on("error", (err) => {
+      activeSegmentJobs.delete(downloadId);
+      errorDownload("external", "Could not start external downloader.", {
+        downloadId,
+        binaryPath,
+        error: err.message,
+      });
+      event.sender.send("downloads-error", {
+        downloadId,
+        error: `Could not start downloader: ${err.message}`,
+      });
+    });
+
+    proc.on("close", (code, signal) => {
+      activeSegmentJobs.delete(downloadId);
+
+      if (job.cancelled || signal) {
+        warnDownload("external", "External downloader cancelled.", { downloadId, code, signal });
+        event.sender.send("downloads-cancelled", { downloadId });
+        return;
+      }
+
+      if (code === 0) {
+        const resolvedOutputPath =
+          parserState.outputPath ||
+          findLatestVideoFile(downloadPath, safeTitle) ||
+          outputPath;
+        logDownload("external", "External downloader completed.", {
+          downloadId,
+          outputPath: resolvedOutputPath,
+        });
+        event.sender.send("downloads-complete", {
+          downloadId,
+          outputPath: resolvedOutputPath,
+        });
+        return;
+      }
+
+      const errorLine =
+        String(stderrBuffer || "")
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .reverse()
+          .find((line) => /error|failed|unable|cannot|denied|timeout/i.test(line)) ||
+        `Downloader exited with code ${code}.`;
+      errorDownload("external", "External downloader failed.", {
+        downloadId,
+        code,
+        error: errorLine,
+      });
+      event.sender.send("downloads-error", {
+        downloadId,
+        error: errorLine,
+      });
+    });
+
+    return { success: true };
+  } catch (err) {
+    errorDownload("external", "Failed to launch external downloader.", {
+      downloadId,
+      error: err.message,
+    });
+    return { success: false, error: err.message };
+  }
+});
 
 ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outputPath, referer = "", title = "" }) => {
   return new Promise((resolve) => {
