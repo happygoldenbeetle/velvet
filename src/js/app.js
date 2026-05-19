@@ -956,16 +956,16 @@
 
   async function loadMangaPage() {
     try {
-      const latestPromise = tmdb.mangaLatestPool(36);
+      const latestPromise = tmdb.mangaLatestPool(24).catch((err) => {
+        console.warn("Failed to load Manga Right Now:", err);
+        return [];
+      });
       const popularPromise = tmdb.mangaPopular(24);
       const mangaHeroPromise = tabHeroes.manga
         ? Promise.resolve(tabHeroes.manga)
-        : Promise.all([latestPromise, popularPromise])
-            .then(([latestItems, popularResponse]) => {
-              const heroPool = [
-                ...(latestItems || []),
-                ...((popularResponse?.results || [])),
-              ].filter((item) => item.poster_path || item.backdrop_path);
+        : popularPromise
+            .then((popularResponse) => {
+              const heroPool = (popularResponse?.results || []).filter((item) => item.poster_path || item.backdrop_path);
               const heroData = heroPool.length > 0
                 ? heroPool[Math.floor(Math.random() * Math.min(heroPool.length, 20))]
                 : null;
@@ -973,8 +973,7 @@
             })
             .catch(() => null);
 
-      const [latestItems, popularResponse, preparedMangaHero] = await Promise.all([
-        latestPromise,
+      const [popularResponse, preparedMangaHero] = await Promise.all([
         popularPromise,
         mangaHeroPromise,
       ]);
@@ -986,12 +985,22 @@
       els.hero.style.display = "";
 
       els.contentRows.innerHTML = [
-        createRowHTML("Manga Right Now", latestItems || [], "manga"),
         createRowHTML("Popular Manga", popularResponse?.results || [], "manga"),
       ].join("");
 
       attachAllRowListeners();
       animateContentIn();
+
+      latestPromise.then((latestItems) => {
+        if (currentPage !== "manga") return;
+        const latestRow = createRowHTML("Manga Right Now", latestItems || [], "manga");
+        if (!latestRow) return;
+        els.contentRows.innerHTML = [
+          latestRow,
+          createRowHTML("Popular Manga", popularResponse?.results || [], "manga"),
+        ].join("");
+        attachAllRowListeners();
+      });
     } catch (err) {
       console.error("Failed to load Manga:", err);
       showToast("Failed to load Manga", "error");
