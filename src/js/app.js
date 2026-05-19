@@ -453,16 +453,56 @@
 
   async function performSearch(query) {
     try {
-      const data = await tmdb.searchMulti(query);
-      const results = data.results.filter(
-        (r) => (r.media_type === "movie" || r.media_type === "tv") && r.poster_path
-      );
+      const [moviesData, tvData, mangaData] = await Promise.all([
+        tmdb.searchMovies(query),
+        tmdb.searchTV(query),
+        tmdb.searchManga(query).catch((err) => {
+          console.warn("Manga search failed:", err);
+          return { results: [] };
+        }),
+      ]);
+
+      const isAnimeResult = (item) =>
+        Array.isArray(item.genre_ids) &&
+        item.genre_ids.includes(16) &&
+        item.original_language === "ja";
+
+      const movies = (moviesData.results || []).filter((item) => item.poster_path && !isAnimeResult(item));
+      const series = (tvData.results || []).filter((item) => item.poster_path && !isAnimeResult(item));
+      const anime = [
+        ...(tvData.results || [])
+          .filter((item) => item.poster_path && isAnimeResult(item))
+          .map((item) => ({ ...item, media_type: "tv" })),
+        ...(moviesData.results || [])
+          .filter((item) => item.poster_path && isAnimeResult(item))
+          .map((item) => ({ ...item, media_type: "movie" })),
+      ];
+      const manga = (mangaData.results || []).map((item) => ({ ...item, media_type: "manga" }));
+
+      const renderSection = (title, items, forceType = null) => {
+        if (!items.length) return "";
+        return `
+          <section class="search-results-section">
+            <div class="row-title">${title}</div>
+            <div class="search-results-grid">
+              ${items.map((item) => createCardHTML(item, forceType || item.media_type)).join("")}
+            </div>
+          </section>
+        `;
+      };
+
+      const sectionsHtml = [
+        renderSection("Movies", movies, "movie"),
+        renderSection("Series", series, "tv"),
+        renderSection("Anime", anime),
+        renderSection("Manga", manga, "manga"),
+      ].join("");
 
       els.mainContent.style.display = "none";
       els.searchResultsPage.style.display = "";
       els.searchResultsTitle.textContent = `Results for "${query}"`;
-      els.searchResultsGrid.innerHTML = results.length
-        ? results.map((item) => createCardHTML(item, item.media_type)).join("")
+      els.searchResultsGrid.innerHTML = sectionsHtml
+        ? sectionsHtml
         : '<div class="empty-state"><p>No results found.</p></div>';
 
       attachCardListeners(els.searchResultsGrid);

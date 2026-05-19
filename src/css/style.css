@@ -1958,7 +1958,13 @@ body.dom-fullscreen .titlebar {
   margin: 0;
 }
 
-.search-results-grid {
+#search-results-grid.search-results-grid {
+  display: block;
+  padding: 0;
+  margin: 0;
+}
+
+.search-results-section .search-results-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
@@ -1966,8 +1972,16 @@ body.dom-fullscreen .titlebar {
   margin: -16px 0;
 }
 
-.search-results-grid .card {
+.search-results-section .search-results-grid .card {
   width: 100%;
+}
+
+.search-results-section + .search-results-section {
+  margin-top: 28px;
+}
+
+.search-results-section .row-title {
+  margin-bottom: 16px;
 }
 
 /* ═══ MY LIST ═══ */

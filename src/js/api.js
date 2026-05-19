@@ -468,6 +468,22 @@ const tmdb = {
   searchTV(query, page = 1) {
     return this.fetch("/search/tv", { query, page });
   },
+  async searchManga(query, limit = 12) {
+    const response = await this.mangadexFetch("/manga", {
+      title: query,
+      limit,
+      "includes[]": ["cover_art", "author", "artist"],
+      "availableTranslatedLanguage[]": ["en"],
+      "contentRating[]": ["safe", "suggestive"],
+      "order[relevance]": "desc",
+    });
+
+    return {
+      results: (response.data || [])
+        .map((entry) => this.normalizeManga(entry))
+        .filter((entry) => entry.poster_path),
+    };
+  },
 
   // ── Genres ──
   movieGenres() {
