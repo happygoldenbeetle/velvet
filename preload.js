@@ -20,6 +20,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // ── Downloads: stream resolution ──
   resolveStream: (embedUrl) => ipcRenderer.invoke("download-resolve-stream", embedUrl),
+  onM3u8Found: (callback) => {
+    const listener = (_event, url) => callback(url);
+    ipcRenderer.on("m3u8-found", listener);
+    return () => ipcRenderer.removeListener("m3u8-found", listener);
+  },
+  onMp4Found: (callback) => {
+    const listener = (_event, url) => callback(url);
+    ipcRenderer.on("mp4-found", listener);
+    return () => ipcRenderer.removeListener("mp4-found", listener);
+  },
   fetchManifest: (m3u8Url) => ipcRenderer.invoke("download-fetch-manifest", m3u8Url),
 
   // ── Downloads: segment downloader ──
@@ -48,6 +58,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getDownloadsLogPath: () => ipcRenderer.invoke("downloads-get-log-path"),
   checkFfmpeg: () => ipcRenderer.invoke("downloads-check-ffmpeg"),
   checkExternalDownloader: (folderPath) => ipcRenderer.invoke("downloads-check-external-tool", folderPath),
+  getBundledExternalDownloader: () => ipcRenderer.invoke("downloads-get-bundled-external-tool"),
   runExternalDownload: (opts) => ipcRenderer.invoke("downloads-run-external", opts),
   pickFolder: () => ipcRenderer.invoke("downloads-pick-folder"),
   showInFolder: (filePath) => ipcRenderer.invoke("downloads-show-in-folder", filePath),

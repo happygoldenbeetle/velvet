@@ -148,6 +148,31 @@ const PLAYER_WATERMARK_SCRIPT = `
 `;
 
 let mainWindow;
+const playerWebContentsIds = new Set();
+
+function capturePlayerMediaRequest(details) {
+  const url = details?.url || "";
+  const lowerUrl = url.toLowerCase();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!playerWebContentsIds.has(details.webContentsId)) return;
+
+  if (lowerUrl.includes(".m3u8")) {
+    mainWindow.webContents.send("m3u8-found", url);
+    return;
+  }
+
+  if (lowerUrl.includes(".vtt") || lowerUrl.includes(".srt")) {
+    mainWindow.webContents.send("subtitle-found", {
+      url,
+      lang: "unknown",
+    });
+    return;
+  }
+
+  if (lowerUrl.includes(".mp4")) {
+    mainWindow.webContents.send("mp4-found", url);
+  }
+}
 
 function attachFullscreenShortcut(webContents) {
   webContents.on("before-input-event", (event, input) => {
@@ -215,11 +240,13 @@ function createWindow() {
   // Ad-blocker: single unified request interceptor
   // ──────────────────────────────────────────────
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-    if (isAdUrl(details.url)) {
-      callback({ cancel: true });
-    } else {
-      callback({});
+    const blocked = isAdUrl(details.url);
+    if (!blocked) {
+      try {
+        capturePlayerMediaRequest(details);
+      } catch {}
     }
+    callback({ cancel: blocked });
   });
 
   // Block new window popups (ad popups)
@@ -229,6 +256,11 @@ function createWindow() {
 
   // Lock down guest webviews used by the player.
   mainWindow.webContents.on("did-attach-webview", (_event, guestContents) => {
+    playerWebContentsIds.add(guestContents.id);
+    guestContents.once("destroyed", () => {
+      playerWebContentsIds.delete(guestContents.id);
+    });
+
     attachFullscreenShortcut(guestContents);
     guestContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
@@ -321,6 +353,13 @@ function getDownloadsLogPath() {
   return path.join(getDownloadsLogDir(), "downloads.log");
 }
 
+function getPreviousDownloadsLogPath() {
+  return path.join(getDownloadsLogDir(), "downloads.previous.log");
+}
+
+const DOWNLOAD_LOG_MAX_BYTES = 256 * 1024;
+const DOWNLOAD_LOG_VALUE_MAX_CHARS = 2000;
+
 function findFirstOnPath(commandName) {
   try {
     const result = spawnSync("where.exe", [commandName], {
@@ -376,7 +415,11 @@ function getExternalDownloaderExecutable(folderPath) {
   });
 
   if (!binary) return { exists: false, reason: "no_executable" };
-  return { exists: true, binaryPath: path.join(folderPath, binary) };
+  return { exists: true, folderPath, binaryPath: path.join(folderPath, binary) };
+}
+
+function getBundledExternalDownloader() {
+  return getExternalDownloaderExecutable(path.join(__dirname, "bin", "vid-dl"));
 }
 
 function findLatestVideoFile(folderPath, preferredStem = "") {
@@ -386,27 +429,40 @@ function findLatestVideoFile(folderPath, preferredStem = "") {
     const candidates = fs
       .readdirSync(folderPath)
       .filter((fileName) => VIDEO_EXTS.includes(path.extname(fileName).toLowerCase()))
+      .filter((fileName) => !normalizedStem || fileName.toLowerCase().startsWith(normalizedStem))
       .map((fileName) => {
         const absolutePath = path.join(folderPath, fileName);
         return {
           absolutePath,
           fileName,
           mtimeMs: fs.statSync(absolutePath).mtimeMs,
-          preferred: normalizedStem ? fileName.toLowerCase().startsWith(normalizedStem) : false,
         };
       })
-      .sort((a, b) => {
-        if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
-        return b.mtimeMs - a.mtimeMs;
-      });
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
     return candidates[0]?.absolutePath || null;
   } catch {
     return null;
   }
 }
 
-// Track active download jobs so they can be cancelled
-// Map<downloadId, { cancelled: boolean, currentReq: http.ClientRequest | null, currentProc: ChildProcess | null }>
+function resolveCompletedVideoPath(downloadPath, outputPath, preferredStem = "", reportedPath = "") {
+  const candidates = [
+    reportedPath,
+    outputPath,
+    findLatestVideoFile(downloadPath, preferredStem),
+  ].filter(Boolean);
+
+  return candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate) && fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  }) || "";
+}
+
+// Track active download jobs so they can be cancelled.
+// Map<downloadId, { cancelled: boolean, deleteOnCancel: boolean, entry: object | null, currentReq: http.ClientRequest | null, currentProc: ChildProcess | null }>
 const activeSegmentJobs = new Map();
 
 // Ensure Videos/Velvet dir exists
@@ -426,18 +482,104 @@ function ensureDownloadsLogDir() {
 
 function serializeLogExtra(extra) {
   if (extra === null || extra === undefined) return "";
-  if (typeof extra === "string") return extra;
+  const limit = (value) => {
+    const text = String(value);
+    return text.length > DOWNLOAD_LOG_VALUE_MAX_CHARS
+      ? `${text.slice(0, DOWNLOAD_LOG_VALUE_MAX_CHARS)}... [truncated ${text.length - DOWNLOAD_LOG_VALUE_MAX_CHARS} chars]`
+      : text;
+  };
+  if (typeof extra === "string") return limit(extra);
   try {
-    return JSON.stringify(extra);
+    return limit(JSON.stringify(extra));
   } catch {
-    return String(extra);
+    return limit(extra);
   }
+}
+
+function deleteDownloadFiles(entry) {
+  if (!entry || typeof entry !== "object") return;
+
+  if (entry.outputPath && fs.existsSync(entry.outputPath)) {
+    fs.rmSync(entry.outputPath, { force: true });
+  }
+
+  if (entry.outputPath) {
+    const sidecarPaths = [
+      `${entry.outputPath}.part`,
+      `${entry.outputPath}.ytdl`,
+      `${entry.outputPath}.temp`,
+    ];
+    sidecarPaths.forEach((sidecarPath) => {
+      if (fs.existsSync(sidecarPath)) {
+        fs.rmSync(sidecarPath, { force: true });
+      }
+    });
+
+    const outputFolder = path.dirname(entry.outputPath);
+    const outputBase = path.basename(entry.outputPath);
+    const outputStem = path.basename(entry.outputPath, path.extname(entry.outputPath));
+    if (fs.existsSync(outputFolder)) {
+      fs.readdirSync(outputFolder)
+        .filter((fileName) => fileName === outputBase || fileName.startsWith(`${outputBase}.`) || fileName.startsWith(`${outputStem}.`))
+        .forEach((fileName) => {
+          fs.rmSync(path.join(outputFolder, fileName), { recursive: true, force: true });
+        });
+    }
+  }
+
+  if (entry.segmentsDir && fs.existsSync(entry.segmentsDir)) {
+    fs.rmSync(entry.segmentsDir, { recursive: true, force: true });
+  }
+
+  if (entry.id) {
+    const statePath = path.join(getVelvetVideosDir(), ".states", `${entry.id}.json`);
+    if (fs.existsSync(statePath)) fs.rmSync(statePath, { force: true });
+  }
+
+  if (entry.outputPath) {
+    const folder = path.dirname(entry.outputPath);
+    if (fs.existsSync(folder)) {
+      const remaining = fs.readdirSync(folder).filter((f) => !f.startsWith("."));
+      if (remaining.length === 0) {
+        fs.rmSync(folder, { recursive: true, force: true });
+      }
+    }
+  }
+}
+
+function cancelActiveDownload(downloadId, options = {}) {
+  const job = activeSegmentJobs.get(downloadId);
+  if (!job) return false;
+
+  warnDownload("job", options.deleteOnCancel ? "Deleting active download job." : "Cancelling download job.", { downloadId });
+  job.cancelled = true;
+  if (options.deleteOnCancel) {
+    job.deleteOnCancel = true;
+    job.entry = options.entry || job.entry || null;
+  }
+  try { job.currentReq?.destroy(); } catch {}
+  try { job.currentProc?.kill(); } catch {}
+  return true;
+}
+
+function rotateDownloadLogIfNeeded() {
+  const logPath = getDownloadsLogPath();
+  if (!fs.existsSync(logPath)) return;
+  const stat = fs.statSync(logPath);
+  if (stat.size < DOWNLOAD_LOG_MAX_BYTES) return;
+
+  const previousLogPath = getPreviousDownloadsLogPath();
+  if (fs.existsSync(previousLogPath)) {
+    fs.rmSync(previousLogPath, { force: true });
+  }
+  fs.renameSync(logPath, previousLogPath);
 }
 
 function appendDownloadLog(level, scope, message, extra = null) {
   try {
     ensureVelvetDir();
     ensureDownloadsLogDir();
+    rotateDownloadLogIfNeeded();
     const timestamp = new Date().toISOString();
     const suffix = serializeLogExtra(extra);
     const line = `${timestamp} [${level.toUpperCase()}] [${scope}] ${message}${suffix ? ` ${suffix}` : ""}\n`;
@@ -473,6 +615,23 @@ function errorDownload(scope, message, extra = null) {
   } else {
     console.error(prefix);
   }
+}
+
+function shouldLogExternalStdoutLine(line, update) {
+  if (!line) return false;
+  if (/^\[download\]\s+[\d.]+%/i.test(line)) return false;
+  if (/^Downloading:\s+/i.test(line)) return false;
+  if (/^\[debug\]/i.test(line)) return false;
+  if (update?.message && /^(Downloaded|Processing|\d+%|Fragment|Retrying)/i.test(update.message)) return false;
+  return (
+    /^\[generic\]/i.test(line) ||
+    /^\[info\]/i.test(line) ||
+    /^\[hlsnative\]/i.test(line) ||
+    /^\[download\]\s+Destination:/i.test(line) ||
+    /^\[Merger\]/i.test(line) ||
+    /^Download finished/i.test(line) ||
+    /warning|error|failed|unable|cannot|denied|timeout/i.test(line)
+  );
 }
 
 function getHttpStatusMessage(statusCode) {
@@ -953,13 +1112,7 @@ ipcMain.on("download-job-unregister", (_event, downloadId) => {
 
 // ── Cancel a download ──────────────────────────────────────────────────────
 ipcMain.on("download-cancel", (_event, downloadId) => {
-  const job = activeSegmentJobs.get(downloadId);
-  if (job) {
-    warnDownload("job", "Cancelling download job.", { downloadId });
-    job.cancelled = true;
-    try { job.currentReq?.destroy(); } catch {}
-    try { job.currentProc?.kill(); } catch {}
-  }
+  cancelActiveDownload(downloadId);
 });
 
 ipcMain.handle("downloads-pick-folder", async () => {
@@ -972,6 +1125,10 @@ ipcMain.handle("downloads-pick-folder", async () => {
 
 ipcMain.handle("downloads-check-external-tool", (_event, folderPath) => {
   return getExternalDownloaderExecutable(folderPath);
+});
+
+ipcMain.handle("downloads-get-bundled-external-tool", () => {
+  return getBundledExternalDownloader();
 });
 
 ipcMain.handle("downloads-show-in-folder", (_event, filePath) => {
@@ -1016,6 +1173,19 @@ function parseExternalDownloaderLine(line, previous = {}) {
     const speedMatch = trimmed.match(/\bat\s+([\d.]+\s*(?:[KMGT]i?B|B)\/s)/i);
     if (speedMatch) update.speed = speedMatch[1].trim();
     update.message = `${update.progress}% of ${update.size}`;
+  }
+
+  const byteProgressMatch = trimmed.match(/^Downloading:\s+([\d,]+)\s+bytes(?:\s+([\d.]+\s*(?:[KMGT]?B|[KMGT]i?B)\/s))?/i);
+  if (byteProgressMatch) {
+    const bytes = Number.parseInt(byteProgressMatch[1].replace(/,/g, ""), 10);
+    if (Number.isFinite(bytes)) {
+      update.downloadedBytes = bytes;
+      update.size = bytes < 1024 * 1024
+        ? `${Math.round(bytes / 1024)} KiB`
+        : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+      update.message = `Downloaded ${update.size}`;
+    }
+    if (byteProgressMatch[2]) update.speed = byteProgressMatch[2].trim();
   }
 
   const ffmpegDurationMatch = trimmed.match(/Duration:\s*(\d+):(\d+):([\d.]+)/i);
@@ -1145,6 +1315,8 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
 
     const job = activeSegmentJobs.get(downloadId) || {
       cancelled: false,
+      deleteOnCancel: false,
+      entry: null,
       currentReq: null,
       currentProc: null,
     };
@@ -1167,6 +1339,7 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
         progress: update.progress ?? null,
         speed: update.speed ?? null,
         size: update.size ?? null,
+        downloadedBytes: update.downloadedBytes ?? null,
         completedFragments: update.completedFragments ?? parserState.completedFragments ?? null,
         totalFragments: update.totalFragments ?? parserState.totalFragments ?? null,
         message: update.message || "",
@@ -1178,13 +1351,13 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
       const trimmed = String(line || "").trim();
       if (!trimmed) return;
 
+      const update = parseExternalDownloaderLine(trimmed, parserState);
       if (source === "stderr") {
         warnDownload("external", "External downloader stderr.", { downloadId, line: trimmed });
-      } else {
+      } else if (shouldLogExternalStdoutLine(trimmed, update)) {
         logDownload("external", "External downloader stdout.", { downloadId, line: trimmed });
       }
 
-      const update = parseExternalDownloaderLine(trimmed, parserState);
       if (!update) return;
       parserState = { ...parserState, ...update };
       emitProgress(update);
@@ -1192,7 +1365,7 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
 
     proc.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
-      const parts = stdoutBuffer.split(/\r?\n/);
+      const parts = stdoutBuffer.split(/\r?\n|\r/);
       stdoutBuffer = parts.pop() || "";
       parts.forEach((line) => consumeLine(line, "stdout"));
     });
@@ -1200,7 +1373,7 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
     proc.stderr.on("data", (chunk) => {
       const text = chunk.toString();
       stderrBuffer += text;
-      text.split(/\r?\n/).forEach((line) => consumeLine(line, "stderr"));
+      text.split(/\r?\n|\r/).forEach((line) => consumeLine(line, "stderr"));
     });
 
     proc.on("error", (err) => {
@@ -1218,18 +1391,46 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
 
     proc.on("close", (code, signal) => {
       activeSegmentJobs.delete(downloadId);
+      if (stdoutBuffer.trim()) {
+        consumeLine(stdoutBuffer.trim(), "stdout");
+        stdoutBuffer = "";
+      }
 
       if (job.cancelled || signal) {
         warnDownload("external", "External downloader cancelled.", { downloadId, code, signal });
+        if (job.deleteOnCancel && job.entry) {
+          try {
+            deleteDownloadFiles(job.entry);
+            logDownload("external", "Deleted partial files for cancelled download.", { downloadId });
+          } catch (err) {
+            warnDownload("external", "Could not delete partial files for cancelled download.", { downloadId, error: err.message });
+          }
+        }
         event.sender.send("downloads-cancelled", { downloadId });
         return;
       }
 
       if (code === 0) {
-        const resolvedOutputPath =
-          parserState.outputPath ||
-          findLatestVideoFile(downloadPath, safeTitle) ||
-          outputPath;
+        const resolvedOutputPath = resolveCompletedVideoPath(
+          downloadPath,
+          outputPath,
+          safeTitle,
+          parserState.outputPath
+        );
+        if (!resolvedOutputPath) {
+          const error = "Downloader exited successfully, but no completed video file was found.";
+          errorDownload("external", error, {
+            downloadId,
+            downloadPath,
+            outputPath,
+            reportedPath: parserState.outputPath,
+          });
+          event.sender.send("downloads-error", {
+            downloadId,
+            error,
+          });
+          return;
+        }
         logDownload("external", "External downloader completed.", {
           downloadId,
           outputPath: resolvedOutputPath,
@@ -1328,7 +1529,7 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const job = activeSegmentJobs.get(downloadId) || { cancelled: false, currentReq: null, currentProc: null };
+    const job = activeSegmentJobs.get(downloadId) || { cancelled: false, deleteOnCancel: false, entry: null, currentReq: null, currentProc: null };
     job.currentProc = proc;
     activeSegmentJobs.set(downloadId, job);
 
@@ -1403,6 +1604,14 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
 
       if (cancelled) {
         warnDownload("ytdlp", "yt-dlp download cancelled.", { downloadId, signal });
+        if (job.deleteOnCancel && job.entry) {
+          try {
+            deleteDownloadFiles(job.entry);
+            logDownload("ytdlp", "Deleted partial files for cancelled download.", { downloadId });
+          } catch (err) {
+            warnDownload("ytdlp", "Could not delete partial files for cancelled download.", { downloadId, error: err.message });
+          }
+        }
         event.sender.send("downloads-cancelled", { downloadId });
         resolve({ success: false, cancelled: true, error: "Download was cancelled." });
         return;
@@ -1624,41 +1833,11 @@ ipcMain.handle("downloads-save", (_event, manifest) => {
 // ── Delete a downloaded file + its segments ────────────────────────────────
 ipcMain.handle("download-delete", (_event, entry) => {
   try {
-    // Delete final MP4
-    if (entry.outputPath && fs.existsSync(entry.outputPath)) {
-      fs.unlinkSync(entry.outputPath);
+    if (entry?.id && cancelActiveDownload(entry.id, { deleteOnCancel: true, entry })) {
+      return { success: true, cancelled: true };
     }
-    if (entry.outputPath) {
-      const sidecarPaths = [
-        `${entry.outputPath}.part`,
-        `${entry.outputPath}.ytdl`,
-        `${entry.outputPath}.temp`,
-      ];
-      sidecarPaths.forEach((sidecarPath) => {
-        if (fs.existsSync(sidecarPath)) {
-          fs.rmSync(sidecarPath, { force: true });
-        }
-      });
-    }
-    // Delete segments dir if it still exists
-    if (entry.segmentsDir && fs.existsSync(entry.segmentsDir)) {
-      fs.rmSync(entry.segmentsDir, { recursive: true, force: true });
-    }
-    // Delete state file
-    if (entry.id) {
-      const statePath = path.join(getVelvetVideosDir(), ".states", `${entry.id}.json`);
-      if (fs.existsSync(statePath)) fs.unlinkSync(statePath);
-    }
-    // Try to remove the title folder if now empty
-    if (entry.outputPath) {
-      const folder = path.dirname(entry.outputPath);
-      if (fs.existsSync(folder)) {
-        const remaining = fs.readdirSync(folder).filter((f) => !f.startsWith("."));
-        if (remaining.length === 0) {
-          fs.rmSync(folder, { recursive: true, force: true });
-        }
-      }
-    }
+
+    deleteDownloadFiles(entry);
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };

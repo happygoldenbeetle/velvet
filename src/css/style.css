@@ -2661,6 +2661,14 @@ body.dom-fullscreen .titlebar {
   transition: background var(--transition), border-color var(--transition), color var(--transition);
   align-self: center;
   margin-left: 10px;
+  position: relative;
+  overflow: visible;
+  --ep-progress: 0%;
+}
+
+.ep-dl-btn svg {
+  position: relative;
+  z-index: 2;
 }
 
 .ep-dl-btn:hover {
@@ -2669,10 +2677,40 @@ body.dom-fullscreen .titlebar {
   color: var(--text-primary);
 }
 
+.ep-dl-btn:disabled {
+  opacity: 1;
+}
+
+.ep-dl-btn.initializing,
 .ep-dl-btn.downloading {
-  border-color: var(--green);
-  color: var(--green);
-  animation: dl-pulse 1.4s ease-in-out infinite;
+  border-color: rgba(255,255,255,0.35);
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.08);
+  cursor: default;
+}
+
+.ep-dl-btn.initializing::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.26);
+  border-top-color: var(--text-primary);
+  animation: ep-dl-spin 850ms linear infinite;
+}
+
+.ep-dl-btn.downloading::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: conic-gradient(var(--text-primary) var(--ep-progress), rgba(255,255,255,0.14) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+}
+
+@keyframes ep-dl-spin {
+  to { transform: rotate(360deg); }
 }
 
 .ep-dl-btn.complete {
