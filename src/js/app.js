@@ -8,7 +8,7 @@
   let myList = JSON.parse(localStorage.getItem("cinemax_mylist") || "[]");
   let continueWatching = JSON.parse(localStorage.getItem("cinemax_continue_watching") || "[]");
   let heroItem = null;
-  const tabHeroes = { home: null, movies: null, tvshows: null, anime: null };
+  const tabHeroes = { home: null, movies: null, tvshows: null, anime: null, manga: null };
   let modalItem = null;
   let searchTimeout = null;
   let activeWatchSession = null;
@@ -224,6 +224,7 @@
       case "movies": loadMoviesPage(); break;
       case "tvshows": loadTVPage(); break;
       case "anime": loadAnimePage(); break;
+      case "manga": loadMangaPage(); break;
       case "mylist": loadMyListPage(); break;
     }
 
@@ -530,6 +531,9 @@
   async function hydratePlayableItem(item) {
     try {
       const type = item.media_type || "movie";
+      if (type === "manga") {
+        return item;
+      }
       if (type === "tv" && !item.number_of_seasons) {
         const details = await tmdb.tvDetails(item.id);
         return { ...item, ...details, media_type: "tv" };
@@ -899,6 +903,51 @@
     }
   }
 
+  async function loadMangaPage() {
+    try {
+      const latestPromise = tmdb.mangaLatestPool(36);
+      const popularPromise = tmdb.mangaPopular(24);
+      const mangaHeroPromise = tabHeroes.manga
+        ? Promise.resolve(tabHeroes.manga)
+        : Promise.all([latestPromise, popularPromise])
+            .then(([latestItems, popularResponse]) => {
+              const heroPool = [
+                ...(latestItems || []),
+                ...((popularResponse?.results || [])),
+              ].filter((item) => item.poster_path || item.backdrop_path);
+              const heroData = heroPool.length > 0
+                ? heroPool[Math.floor(Math.random() * Math.min(heroPool.length, 20))]
+                : null;
+              return heroData;
+            })
+            .catch(() => null);
+
+      const [latestItems, popularResponse, preparedMangaHero] = await Promise.all([
+        latestPromise,
+        popularPromise,
+        mangaHeroPromise,
+      ]);
+
+      if (!tabHeroes.manga) {
+        tabHeroes.manga = preparedMangaHero || null;
+      }
+      if (tabHeroes.manga) setHero(tabHeroes.manga);
+      els.hero.style.display = "";
+
+      els.contentRows.innerHTML = [
+        createRowHTML("Manga Right Now", latestItems || [], "manga"),
+        createRowHTML("Popular Manga", popularResponse?.results || [], "manga"),
+      ].join("");
+
+      attachAllRowListeners();
+      animateContentIn();
+    } catch (err) {
+      console.error("Failed to load Manga:", err);
+      showToast("Failed to load Manga", "error");
+      animateContentIn();
+    }
+  }
+
   function loadMyListPage() {
     els.hero.style.display = "none";
     if (myList.length === 0) {
@@ -933,8 +982,11 @@
     const apiType = item.media_type || "movie";
     const logoCacheKey = `${apiType}-${item.id}`;
     heroItem = item;
-    els.heroBackdrop.style.backgroundImage = `url(${tmdb.backdrop(item.backdrop_path)})`;
-    if (typeof item.heroLogoUrl !== "undefined") {
+    const heroBackdrop = resolveBackdropSrc(item.backdrop_path || item.poster_path);
+    els.heroBackdrop.style.backgroundImage = heroBackdrop ? `url(${heroBackdrop})` : "none";
+    if (apiType === "manga") {
+      showHeroText(title);
+    } else if (typeof item.heroLogoUrl !== "undefined") {
       if (item.heroLogoUrl) showHeroLogo(item.heroLogoUrl, title);
       else showHeroText(title);
     } else if (heroLogoCache.has(logoCacheKey)) {
@@ -948,7 +1000,7 @@
 
     const year = (item.release_date || item.first_air_date || "").slice(0, 4);
     let rating = item.vote_average ? item.vote_average.toFixed(1) : "N/A";
-    const type = item.media_type === "tv" ? "TV Series" : "Movie";
+    const type = item.media_type === "tv" ? "TV Series" : item.media_type === "manga" ? "Manga" : "Movie";
 
     els.heroMeta.innerHTML = `
       <span class="rating">★ ${rating}</span>
@@ -956,8 +1008,15 @@
       <span class="meta-divider">•</span><span>${type}</span>
     `;
 
+    if (apiType === "manga") {
+      els.heroMeta.innerHTML = `
+        ${year ? `<span>${year}</span><span class="meta-divider">â€¢</span>` : ""}
+        <span>${type}</span>
+      `;
+    }
+
     // Fetch details asynchronously to get IMDb rating for hero banner
-    tmdb[apiType === "tv" ? "tvDetails" : "movieDetails"](item.id).then(async (details) => {
+    if (apiType !== "manga") tmdb[apiType === "tv" ? "tvDetails" : "movieDetails"](item.id).then(async (details) => {
       if (requestId !== heroVisualRequestId || heroItem?.id !== item.id) return;
       const imdbId = details.external_ids?.imdb_id;
       if (imdbId) {
@@ -970,7 +1029,7 @@
       }
     }).catch(() => {});
 
-    if (typeof item.heroLogoUrl === "undefined") {
+    if (apiType !== "manga" && typeof item.heroLogoUrl === "undefined") {
       getPreparedTitleLogo(item.id, apiType)
         .then((logoUrl) => {
           if (requestId !== heroVisualRequestId || heroItem?.id !== item.id) return;
@@ -986,7 +1045,7 @@
         });
     }
 
-    els.heroPlay.onclick = () => playItem(item);
+    els.heroPlay.onclick = () => (apiType === "manga" ? openModal(item) : playItem(item));
     els.heroInfo.onclick = () => openModal(item);
   }
 
@@ -999,10 +1058,20 @@
     return key;
   }
 
+  function resolvePosterSrc(path) {
+    if (!path) return "";
+    return /^https?:\/\//i.test(path) ? path : tmdb.posterSmall(path);
+  }
+
+  function resolveBackdropSrc(path) {
+    if (!path) return "";
+    return /^https?:\/\//i.test(path) ? path : tmdb.backdrop(path);
+  }
+
   function createCardHTML(item, forceType) {
     const type = forceType || item.media_type || "movie";
     const title = item.title || item.name || "Untitled";
-    const poster = item.poster_path ? tmdb.posterSmall(item.poster_path) : "";
+    const poster = resolvePosterSrc(item.poster_path);
     if (!poster) return "";
 
     const key = storeItem(item, type);
@@ -1017,7 +1086,7 @@
 
   function createContinueCardHTML(entry) {
     continueStore.set(entry.key, entry);
-    const poster = entry.poster_path ? tmdb.posterSmall(entry.poster_path) : "";
+    const poster = resolvePosterSrc(entry.poster_path);
     if (!poster) return "";
 
     const percent = Math.max(3, Math.min(100, (entry.progressSeconds / Math.max(entry.durationSeconds || 1, 1)) * 100));
@@ -1222,6 +1291,45 @@
     els.seasonPicker.style.display = "none";
 
     try {
+      if (type === "manga") {
+        const details = await tmdb.mangaDetails(item.id);
+        modalItem = { ...item, ...details, media_type: type };
+        modalEl.classList.remove("loading");
+
+        const modalTitle = details.title || details.name || "Untitled";
+        const backdrop = resolveBackdropSrc(details.backdrop_path || details.poster_path);
+        els.modalBackdrop.style.backgroundImage = backdrop ? `url(${backdrop})` : "none";
+        showModalText(modalTitle);
+        els.modalOverview.textContent = details.overview || "";
+
+        const year = (details.release_date || details.first_air_date || "").slice(0, 4);
+        const genres = (details.genres || []).join(", ");
+        const authors = (details.authors || []).join(", ");
+        const artists = (details.artists || []).join(", ");
+        const status = details.manga_status || "";
+        const language = (details.original_language || "").toUpperCase();
+
+        els.modalMeta.innerHTML = `
+          ${year ? `<span>${year}</span>` : ""}
+          ${status ? `<span>${status}</span>` : ""}
+          <span class="tag">Manga</span>
+          ${details.content_rating ? `<span class="tag">${details.content_rating}</span>` : ""}
+        `;
+
+        els.modalDetails.innerHTML = `
+          ${authors ? `<div class="detail-row"><strong>Author:</strong> <span>${authors}</span></div>` : ""}
+          ${artists ? `<div class="detail-row"><strong>Artist:</strong> <span>${artists}</span></div>` : ""}
+          ${genres ? `<div class="detail-row"><strong>Genres:</strong> <span>${genres}</span></div>` : ""}
+          ${language ? `<div class="detail-row"><strong>Language:</strong> <span>${language}</span></div>` : ""}
+          ${details.latest_readable_chapter?.display_title ? `<div class="detail-row"><strong>Latest Chapter:</strong> <span>${details.latest_readable_chapter.display_title}</span></div>` : ""}
+        `;
+
+        els.modalPlay.style.display = "none";
+        updateListButton(item.id);
+        els.modalList.onclick = () => toggleMyList(modalItem);
+        return;
+      }
+
       const details =
         type === "tv"
           ? await tmdb.tvDetails(item.id)
@@ -1283,7 +1391,7 @@
           .slice(0, 6)
           .map((s) => createCardHTML(s, type))
           .join("");
-        if (similarCards) {
+      if (similarCards) {
           els.modalDetails.innerHTML += `
             <div class="modal-similar">
               <h3>More Like This</h3>
@@ -1293,6 +1401,7 @@
         }
       }
 
+      els.modalPlay.style.display = "";
       els.modalPlay.onclick = () => playItem(modalItem);
 
       // My List button
@@ -1620,6 +1729,12 @@
   async function playItem(item) {
     item = await hydratePlayableItem(item);
     const type = item.media_type || "movie";
+
+    if (type === "manga") {
+      showToast("Manga reader isn't added yet. This tab is frontend-only for now.", "info");
+      openModal(item);
+      return;
+    }
 
     if (type === "tv") {
       const resume = getContinueEntry(item);
