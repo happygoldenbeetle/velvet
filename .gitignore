@@ -1,3 +1,5 @@
 node_modules/
-ffmpeg.exe
+/bin
 update_github.cmd
+/skill
+/md
