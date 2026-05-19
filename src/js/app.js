@@ -303,6 +303,17 @@
     return "";
   }
 
+  function getMangaAgeRating(value = "") {
+    const normalized = String(value).trim().toLowerCase();
+    const map = {
+      safe: "13+",
+      suggestive: "16+",
+      erotica: "18+",
+      pornographic: "18+",
+    };
+    return map[normalized] || "";
+  }
+
   function getTitleAgeRating(details, type) {
     const regionPriority = ["US", "PK", "GB", "IN", "CA", "AU"];
 
@@ -1049,9 +1060,11 @@
     `;
 
     if (apiType === "manga") {
+      const ageRating = getMangaAgeRating(item.content_rating);
       els.heroMeta.innerHTML = `
         ${year ? `<span>${year}</span><span class="meta-divider">â€¢</span>` : ""}
         <span>${type}</span>
+        ${ageRating ? `<span class="meta-divider">â€¢</span><span>${ageRating}</span>` : ""}
       `;
     }
 
@@ -1348,12 +1361,13 @@
         const artists = (details.artists || []).join(", ");
         const status = details.manga_status || "";
         const language = (details.original_language || "").toUpperCase();
+        const ageRating = getMangaAgeRating(details.content_rating);
 
         els.modalMeta.innerHTML = `
           ${year ? `<span>${year}</span>` : ""}
           ${status ? `<span>${status}</span>` : ""}
           <span class="tag">Manga</span>
-          ${details.content_rating ? `<span class="tag">${details.content_rating}</span>` : ""}
+          ${ageRating ? `<span class="tag">${ageRating}</span>` : ""}
         `;
 
         els.modalDetails.innerHTML = `
