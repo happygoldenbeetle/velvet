@@ -331,7 +331,7 @@ ipcMain.handle("mangadex-json", async (_event, url) => {
 // ══════════════════════════════════════════════════════════════════════════
 const https = require("https");
 const http = require("http");
-const { URL: NodeURL } = require("url");
+const { URL: NodeURL, pathToFileURL } = require("url");
 
 // Paths
 const BUNDLED_FFMPEG_PATH = path.join(__dirname, "bin", "ffmpeg.exe");
@@ -461,6 +461,99 @@ function resolveCompletedVideoPath(downloadPath, outputPath, preferredStem = "",
   }) || "";
 }
 
+function getPlayableFileUrl(filePath) {
+  if (!filePath || typeof filePath !== "string") {
+    return { success: false, error: "No file path was provided." };
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  if (!fs.existsSync(resolvedPath)) {
+    return { success: false, error: "The downloaded file was not found on disk." };
+  }
+
+  const stat = fs.statSync(resolvedPath);
+  if (!stat.isFile()) {
+    return { success: false, error: "The selected download is not a video file." };
+  }
+
+  return {
+    success: true,
+    filePath: resolvedPath,
+    url: pathToFileURL(resolvedPath).href,
+    size: stat.size,
+  };
+}
+
+function convertSrtToVtt(srtText) {
+  return `WEBVTT\n\n${String(srtText || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\r/g, "")
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")
+    .replace(/^\d+\n/gm, "")}`;
+}
+
+function getSubtitleForVideo(filePath) {
+  try {
+    if (!filePath || typeof filePath !== "string") {
+      return { success: false, error: "No video path was provided." };
+    }
+
+    const videoPath = path.resolve(filePath);
+    const videoDir = path.dirname(videoPath);
+    const videoStem = path.basename(videoPath, path.extname(videoPath));
+    if (!fs.existsSync(videoDir)) {
+      return { success: false, error: "The video folder was not found." };
+    }
+
+    const candidates = fs
+      .readdirSync(videoDir)
+      .filter((fileName) => {
+        const ext = path.extname(fileName).toLowerCase();
+        return (ext === ".vtt" || ext === ".srt") && fileName.toLowerCase().startsWith(videoStem.toLowerCase());
+      })
+      .sort((a, b) => {
+        const aLower = a.toLowerCase();
+        const bLower = b.toLowerCase();
+        const score = (name) => {
+          if (name.endsWith(".en.vtt")) return 0;
+          if (name.endsWith(".vtt")) return 1;
+          if (name.endsWith(".en.srt")) return 2;
+          return 3;
+        };
+        return score(aLower) - score(bLower);
+      });
+
+    const subtitleName = candidates[0];
+    if (!subtitleName) return { success: false, error: "No subtitle sidecar was found." };
+
+    const subtitlePath = path.join(videoDir, subtitleName);
+    const ext = path.extname(subtitlePath).toLowerCase();
+    if (ext === ".vtt") {
+      return {
+        success: true,
+        url: pathToFileURL(subtitlePath).href,
+        label: subtitleName.toLowerCase().includes(".en.") ? "English" : "Subtitles",
+        srclang: subtitleName.toLowerCase().includes(".en.") ? "en" : "",
+      };
+    }
+
+    const subtitleCacheDir = path.join(getVelvetVideosDir(), ".subtitles");
+    if (!fs.existsSync(subtitleCacheDir)) fs.mkdirSync(subtitleCacheDir, { recursive: true });
+    const safeName = `${videoStem.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")}.vtt`;
+    const vttPath = path.join(subtitleCacheDir, safeName);
+    fs.writeFileSync(vttPath, convertSrtToVtt(fs.readFileSync(subtitlePath, "utf8")), "utf8");
+
+    return {
+      success: true,
+      url: pathToFileURL(vttPath).href,
+      label: subtitleName.toLowerCase().includes(".en.") ? "English" : "Subtitles",
+      srclang: subtitleName.toLowerCase().includes(".en.") ? "en" : "",
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
 // Track active download jobs so they can be cancelled.
 // Map<downloadId, { cancelled: boolean, deleteOnCancel: boolean, entry: object | null, currentReq: http.ClientRequest | null, currentProc: ChildProcess | null }>
 const activeSegmentJobs = new Map();
@@ -558,8 +651,25 @@ function cancelActiveDownload(downloadId, options = {}) {
     job.entry = options.entry || job.entry || null;
   }
   try { job.currentReq?.destroy(); } catch {}
-  try { job.currentProc?.kill(); } catch {}
+  killProcessTree(job.currentProc);
   return true;
+}
+
+function killProcessTree(proc) {
+  if (!proc || !proc.pid) return;
+  try {
+    if (process.platform === "win32") {
+      // Kill by root PID so parallel downloads with their own process trees keep running.
+      const result = spawnSync("taskkill.exe", ["/PID", String(proc.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+        timeout: 5000,
+      });
+      if (result.status === 0) return;
+    }
+  } catch {}
+
+  try { proc.kill(); } catch {}
 }
 
 function rotateDownloadLogIfNeeded() {
@@ -1143,13 +1253,30 @@ ipcMain.handle("downloads-show-in-folder", (_event, filePath) => {
   }
 });
 
+ipcMain.handle("downloads-local-video-url", (_event, filePath) => {
+  try {
+    return getPlayableFileUrl(filePath);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("downloads-find-subtitle", (_event, filePath) => {
+  return getSubtitleForVideo(filePath);
+});
+
 function parseExternalDownloaderLine(line, previous = {}) {
-  const trimmed = String(line || "").trim();
+  const trimmed = String(line || "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x08/g, "")
+    .trim();
   if (!trimmed) return null;
 
   const update = {};
 
-  const fragMatch = trimmed.match(/\(frag\s+(\d+)\/(\d+)\)/i);
+  const fragMatch =
+    trimmed.match(/\(frag\s+(\d+)\/(\d+)\)/i) ||
+    trimmed.match(/\bfrag(?:ment)?\s+(\d+)\s*\/\s*(\d+)\b/i);
   if (fragMatch) {
     const completedFragments = Number.parseInt(fragMatch[1], 10);
     const totalFragments = Number.parseInt(fragMatch[2], 10);
@@ -1173,6 +1300,14 @@ function parseExternalDownloaderLine(line, previous = {}) {
     const speedMatch = trimmed.match(/\bat\s+([\d.]+\s*(?:[KMGT]i?B|B)\/s)/i);
     if (speedMatch) update.speed = speedMatch[1].trim();
     update.message = `${update.progress}% of ${update.size}`;
+  }
+
+  const percentOnlyMatch = trimmed.match(/^\[download\]\s+([\d.]+)%/i);
+  if (percentOnlyMatch && typeof update.progress === "undefined") {
+    update.progress = Math.min(99, Math.round(Number.parseFloat(percentOnlyMatch[1])));
+    const speedMatch = trimmed.match(/\bat\s+([\d.]+\s*(?:[KMGT]i?B|B)\/s)/i);
+    if (speedMatch) update.speed = speedMatch[1].trim();
+    update.message = `Downloading ${update.progress}%`;
   }
 
   const byteProgressMatch = trimmed.match(/^Downloading:\s+([\d,]+)\s+bytes(?:\s+([\d.]+\s*(?:[KMGT]?B|[KMGT]i?B)\/s))?/i);
@@ -1834,6 +1969,14 @@ ipcMain.handle("downloads-save", (_event, manifest) => {
 ipcMain.handle("download-delete", (_event, entry) => {
   try {
     if (entry?.id && cancelActiveDownload(entry.id, { deleteOnCancel: true, entry })) {
+      try {
+        deleteDownloadFiles(entry);
+      } catch (err) {
+        warnDownload("job", "Active download was cancelled, but immediate partial cleanup failed.", {
+          downloadId: entry.id,
+          error: err.message,
+        });
+      }
       return { success: true, cancelled: true };
     }
 

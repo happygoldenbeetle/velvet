@@ -2763,3 +2763,198 @@ body.dom-fullscreen .titlebar {
   opacity: 0.6;
   cursor: default;
 }
+
+/* Downloads page uses the same poster-card surface as My List. */
+.downloads-page {
+  padding: calc(var(--titlebar-height) + var(--navbar-height) + 24px) 16px 60px;
+}
+
+.downloads-page .mylist-heading {
+  margin-bottom: 20px;
+}
+
+.downloads-section-title {
+  margin: 28px 0 14px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.downloads-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  padding: 16px 0;
+  margin-bottom: -16px;
+}
+
+.downloads-grid .card {
+  width: 100%;
+}
+
+.download-library-card {
+  overflow: hidden;
+}
+
+.download-library-card:hover,
+.download-library-card:focus-visible {
+  transform: translateY(-4px);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+  filter: brightness(1.03);
+}
+
+.download-card-fallback {
+  aspect-ratio: 2/3;
+  background: linear-gradient(145deg, #202020, #151515);
+  color: rgba(255, 255, 255, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.download-card-scrim {
+  position: absolute;
+  inset: auto 0 0;
+  height: 55%;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.82));
+  pointer-events: none;
+  z-index: 2;
+}
+
+.download-library-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  max-width: calc(100% - 70px);
+  padding: 4px 7px;
+  border-radius: 3px;
+  background: rgba(20, 20, 20, 0.78);
+  color: var(--white);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.download-status-completed .download-library-badge {
+  color: var(--green);
+}
+
+.download-status-error .download-library-badge,
+.download-status-cancelled .download-library-badge {
+  color: #ffb0b0;
+}
+
+.download-library-info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  padding: 42px 10px 10px;
+  color: var(--white);
+  pointer-events: none;
+}
+
+.download-library-title {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
+}
+
+.download-library-subtitle {
+  margin-top: 3px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
+}
+
+.download-library-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--transition), transform var(--transition);
+}
+
+.download-library-card:hover .download-library-actions,
+.download-library-card:focus-within .download-library-actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.download-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 20, 0.82);
+  color: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background var(--transition), color var(--transition), border-color var(--transition), transform var(--transition);
+}
+
+.download-icon-btn,
+.download-icon-btn * {
+  cursor: pointer;
+}
+
+.download-icon-btn:hover,
+.download-icon-btn:focus-visible,
+.download-delete-btn:hover,
+.download-delete-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--white);
+  transform: scale(1.06);
+}
+
+.download-card-progress-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.28);
+  overflow: hidden;
+}
+
+.download-card-progress-line span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  transition: width 0.45s ease;
+}
+
+.download-card-progress-line.indeterminate span {
+  width: 36% !important;
+  animation: downloadProgressSweep 1.2s ease-in-out infinite;
+}
+
+@keyframes downloadProgressSweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}

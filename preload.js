@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   runExternalDownload: (opts) => ipcRenderer.invoke("downloads-run-external", opts),
   pickFolder: () => ipcRenderer.invoke("downloads-pick-folder"),
   showInFolder: (filePath) => ipcRenderer.invoke("downloads-show-in-folder", filePath),
+  getLocalVideoUrl: (filePath) => ipcRenderer.invoke("downloads-local-video-url", filePath),
+  findSubtitleForVideo: (filePath) => ipcRenderer.invoke("downloads-find-subtitle", filePath),
   logDownload: (payload) => ipcRenderer.send("downloads-log", payload),
   onDownloadProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);

@@ -715,7 +715,10 @@
 
   function toFileUrl(filePath) {
     const normalized = String(filePath || "").replace(/\\/g, "/");
-    return encodeURI(`file:///${normalized}`);
+    return `file:///${normalized
+      .split("/")
+      .map((part, index) => (index === 0 && /^[a-z]:$/i.test(part) ? part : encodeURIComponent(part)))
+      .join("/")}`;
   }
 
   function getDownloadStorageKey(item, season = null, episode = null) {
@@ -827,15 +830,17 @@
     window.electronAPI.onDownloadProgress((payload) => {
       const entry = downloadsManifest.find((download) => download.id === payload.downloadId);
       if (!entry) return;
+      const nextProgress = payload.progress ?? payload.percent ?? entry.progress ?? 0;
       Object.assign(entry, {
         status: payload.phase === "assembling" ? "assembling" : "downloading",
-        progress: payload.progress ?? entry.progress ?? 0,
+        progress: nextProgress,
         speed: payload.speed ?? entry.speed ?? "",
         size: payload.size ?? entry.size ?? "",
         totalFragments: payload.totalFragments ?? entry.totalFragments ?? 0,
         completedFragments: payload.completedFragments ?? entry.completedFragments ?? 0,
         message: payload.message ?? entry.message ?? "",
         outputPath: payload.outputPath || entry.outputPath || "",
+        progressUpdatedAt: Date.now(),
       });
       persistDownloadsManifest();
       refreshDownloadUI();
@@ -891,7 +896,42 @@
 
   function refreshDownloadUI() {
     syncModalDownloadButton(modalItem);
+    syncVisibleEpisodeDownloadButtons();
     if (currentPage === "downloads") loadDownloadsPage();
+  }
+
+  function syncVisibleEpisodeDownloadButtons() {
+    if (!modalItem || !els.episodeList) return;
+    els.episodeList.querySelectorAll('[data-action="download-episode"]').forEach((btn) => {
+      const season = Number.parseInt(btn.dataset.season, 10);
+      const episode = Number.parseInt(btn.dataset.episode, 10);
+      const entry = findDownloadEntry(modalItem, season, episode);
+      const classes = ["ep-dl-btn"];
+      let progress = 0;
+      let label = "Download episode";
+      let disabled = false;
+
+      if (entry?.status === "completed") {
+        classes.push("complete");
+        progress = 100;
+        label = "Downloaded";
+        disabled = true;
+      } else if (entry?.status === "assembling" || entry?.status === "downloading") {
+        progress = Math.max(0, Math.min(99, Math.round(entry.progress || 0)));
+        classes.push(progress > 0 ? "downloading" : "initializing");
+        label = entry.status === "assembling" ? "Merging..." : progress > 0 ? `Downloading ${progress}%` : "Starting download";
+        disabled = true;
+      } else if (entry?.status === "error" || entry?.status === "cancelled") {
+        classes.push("error");
+        label = "Retry download";
+      }
+
+      btn.className = classes.join(" ");
+      btn.disabled = disabled;
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+      btn.style.setProperty("--ep-progress", `${progress}%`);
+    });
   }
 
   function getDownloadToolFolder() {
@@ -1165,7 +1205,70 @@
     `;
   }
 
-  function loadDownloadsPage() {
+  function getDownloadTitle(entry) {
+    if (entry.media_type === "tv") {
+      return `${entry.name || entry.title || "Untitled"} S${String(entry.season || 1).padStart(2, "0")}E${String(entry.episode || 1).padStart(2, "0")}`;
+    }
+    return entry.title || entry.name || "Untitled";
+  }
+
+  function getDownloadSubtitle(entry) {
+    if (entry.media_type === "tv") {
+      return `Season ${entry.season || 1} - Episode ${entry.episode || 1}`;
+    }
+    return entry.media_type === "movie" ? "Movie" : "Download";
+  }
+
+  function getDownloadStatusLabel(entry, progress) {
+    if (entry.status === "completed") return "Downloaded";
+    if (entry.status === "assembling") return "Merging";
+    if (entry.status === "downloading") return progress > 0 ? `${progress}%` : "Starting";
+    if (entry.status === "cancelled") return "Cancelled";
+    if (entry.status === "error") return "Retry";
+    return entry.status || "Download";
+  }
+
+  function createDownloadCardHTML(entry) {
+    const title = getDownloadTitle(entry);
+    const poster = resolvePosterSrc(entry.poster_path);
+    const progress = Math.max(0, Math.min(100, Math.round(entry.progress || 0)));
+    const isActive = entry.status === "downloading" || entry.status === "assembling";
+    const isCompleted = entry.status === "completed";
+    const isFailed = entry.status === "error" || entry.status === "cancelled";
+    const progressClass = progress > 0 ? "" : " indeterminate";
+
+    return `
+      <div class="card download-library-card download-status-${escapeHTML(entry.status || "unknown")}" data-download-id="${escapeHTML(entry.id)}" tabindex="0" aria-label="${escapeHTML(title)}">
+        ${poster ? `
+          <img class="card-img" src="${poster}" alt="${escapeHTML(title)}" loading="lazy" draggable="false" ondragstart="return false;" />
+        ` : `
+          <div class="card-img download-card-fallback" aria-hidden="true">
+            <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </div>
+        `}
+        <div class="download-card-scrim" aria-hidden="true"></div>
+        <div class="download-library-badge">${escapeHTML(getDownloadStatusLabel(entry, progress))}</div>
+        ${isActive ? `
+          <div class="download-card-progress-line${progressClass}" aria-hidden="true">
+            <span style="width:${progress}%"></span>
+          </div>
+        ` : ""}
+        <div class="download-library-info">
+          <div class="download-library-title">${escapeHTML(title)}</div>
+          <div class="download-library-subtitle">${escapeHTML(entry.message || entry.error || getDownloadSubtitle(entry))}</div>
+        </div>
+        <div class="download-library-actions">
+          ${isCompleted ? `<button class="download-icon-btn" data-action="watch-download" title="Watch" aria-label="Watch ${escapeHTML(title)}"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M18.54 9 8.88 3.46a3.42 3.42 0 0 0-5.13 3v11.12A3.42 3.42 0 0 0 8.88 20.54L18.54 15a3.42 3.42 0 0 0 0-6Z"/></svg></button>` : ""}
+          ${isActive ? `<button class="download-icon-btn" data-action="cancel-download" title="Cancel" aria-label="Cancel ${escapeHTML(title)}"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>` : ""}
+          ${isFailed ? `<button class="download-icon-btn" data-action="retry-download" title="Retry" aria-label="Retry ${escapeHTML(title)}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>` : ""}
+          ${entry.outputPath ? `<button class="download-icon-btn" data-action="show-download-folder" title="Open folder" aria-label="Open folder for ${escapeHTML(title)}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg></button>` : ""}
+          <button class="download-icon-btn download-delete-btn" data-action="delete-download" title="Delete" aria-label="Delete ${escapeHTML(title)}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
+        </div>
+      </div>
+    `;
+  }
+
+  function loadDownloadsPageLegacyOld() {
     els.hero.style.display = "none";
     const active = downloadsManifest.filter((entry) => entry.status === "downloading" || entry.status === "assembling");
     const completed = downloadsManifest.filter((entry) => entry.status === "completed");
@@ -1230,7 +1333,7 @@
     animateContentIn();
   }
 
-  function attachDownloadsPageListeners() {
+  function attachDownloadsPageListenersLegacy() {
     els.contentRows.querySelectorAll(".download-card").forEach((card) => {
       const entry = downloadsManifest.find((download) => download.id === card.dataset.downloadId);
       if (!entry) return;
@@ -1264,6 +1367,100 @@
             }
             if (result.cancelled) {
               pendingDeletedDownloads.add(entry.id);
+            }
+            removeDownloadEntry(entry.id);
+            refreshDownloadUI();
+          }
+        });
+      });
+    });
+  }
+
+  function loadDownloadsPage() {
+    els.hero.style.display = "none";
+    const active = downloadsManifest.filter((entry) => entry.status === "downloading" || entry.status === "assembling");
+    const completed = downloadsManifest.filter((entry) => entry.status === "completed");
+    const failed = downloadsManifest.filter((entry) => entry.status === "error" || entry.status === "cancelled");
+
+    const renderCards = (entries) =>
+      entries
+        .sort((a, b) => (b.startedAt || b.completedAt || 0) - (a.startedAt || a.completedAt || 0))
+        .map(createDownloadCardHTML)
+        .join("");
+
+    els.contentRows.innerHTML = `
+      <section class="downloads-page">
+        <h2 class="mylist-heading">Downloads</h2>
+        ${!downloadsManifest.length ? `
+          <div class="downloads-empty">
+            <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <h3>No downloads yet</h3>
+            <p>Start a movie download from the details modal, or use the episode download buttons on TV seasons.</p>
+          </div>
+        ` : `
+          ${active.length ? `<div class="downloads-section-title">Active</div><div class="downloads-grid">${renderCards(active)}</div>` : ""}
+          ${completed.length ? `<div class="downloads-section-title">Completed</div><div class="downloads-grid">${renderCards(completed)}</div>` : ""}
+          ${failed.length ? `<div class="downloads-section-title">Need Attention</div><div class="downloads-grid">${renderCards(failed)}</div>` : ""}
+        `}
+      </section>
+    `;
+
+    attachDownloadsPageListeners();
+    animateContentIn();
+  }
+
+  function attachDownloadsPageListeners() {
+    els.contentRows.querySelectorAll(".download-library-card").forEach((card) => {
+      const entry = downloadsManifest.find((download) => download.id === card.dataset.downloadId);
+      if (!entry) return;
+
+      const watch = () => {
+        if (entry.status === "completed" && entry.outputPath) {
+          openLocalVideo(entry.outputPath, getDownloadTitle(entry));
+        }
+      };
+
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("[data-action]")) return;
+        watch();
+      });
+
+      card.addEventListener("keydown", (event) => {
+        if (event.target.closest("[data-action]")) return;
+        if (event.key === "Enter") watch();
+      });
+
+      card.querySelectorAll("[data-action]").forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const action = button.dataset.action;
+          if (action === "watch-download" && entry.outputPath) {
+            openLocalVideo(entry.outputPath, getDownloadTitle(entry));
+          } else if (action === "cancel-download") {
+            entry.message = "Cancelling...";
+            persistDownloadsManifest();
+            refreshDownloadUI();
+            window.electronAPI.cancelDownload(entry.id);
+          } else if (action === "retry-download") {
+            try {
+              await retryDownload(entry);
+            } catch (err) {
+              showToast(err.message || "Could not restart download.", "error");
+            }
+          } else if (action === "show-download-folder" && entry.outputPath) {
+            await window.electronAPI.showInFolder(entry.outputPath);
+          } else if (action === "delete-download") {
+            button.disabled = true;
+            if (entry.status === "downloading" || entry.status === "assembling") {
+              pendingDeletedDownloads.add(entry.id);
+            }
+            const result = await window.electronAPI.deleteDownload(entry);
+            if (!result?.success) {
+              button.disabled = false;
+              pendingDeletedDownloads.delete(entry.id);
+              showToast(result?.error || "Could not delete download.", "error");
+              return;
             }
             removeDownloadEntry(entry.id);
             refreshDownloadUI();
@@ -1617,7 +1814,7 @@
     const cards = myList.filter((i) => i.poster_path).map((i) => createCardHTML(i)).join("");
     els.contentRows.innerHTML = `
       <div class="mylist-section">
-        <h2 class="mylist-heading">My List <span class="mylist-count">${myList.length} titles</span></h2>
+        <h2 class="mylist-heading">My List</h2>
         <div class="mylist-grid">${cards}</div>
       </div>`;
     attachCardListeners(els.contentRows);
@@ -2339,6 +2536,7 @@
     els.playerTitle.textContent = title || "";
     if (els.playerLocalVideo) {
       els.playerLocalVideo.pause();
+      els.playerLocalVideo.querySelectorAll("track").forEach((track) => track.remove());
       els.playerLocalVideo.removeAttribute("src");
       els.playerLocalVideo.load();
       els.playerLocalVideo.style.display = "none";
@@ -2373,16 +2571,45 @@
     }
   }
 
-  function openLocalVideo(filePath, title) {
+  async function openLocalVideo(filePath, title) {
     closeModal();
     stopWatchSession(true);
     lastCapturedStream = null;
+    let resolved = null;
+    try {
+      resolved = await window.electronAPI?.getLocalVideoUrl?.(filePath);
+    } catch (err) {
+      resolved = { success: false, error: err.message };
+    }
+    const videoUrl = resolved?.success ? resolved.url : toFileUrl(filePath);
+    if (resolved && !resolved.success) {
+      showToast(resolved.error || "The downloaded file could not be opened.", "error");
+      return;
+    }
+
     els.playerTitle.textContent = title || "";
     els.playerWebview.setAttribute("src", "about:blank");
     els.playerWebview.style.display = "none";
     if (els.playerLocalVideo) {
+      els.playerLocalVideo.querySelectorAll("track").forEach((track) => track.remove());
       els.playerLocalVideo.style.display = "block";
-      els.playerLocalVideo.src = toFileUrl(filePath);
+      els.playerLocalVideo.src = videoUrl;
+      let subtitles = null;
+      try {
+        subtitles = await window.electronAPI?.findSubtitleForVideo?.(filePath);
+      } catch {}
+      if (subtitles?.success && subtitles.url) {
+        const track = document.createElement("track");
+        track.kind = "subtitles";
+        track.label = subtitles.label || "Subtitles";
+        if (subtitles.srclang) track.srclang = subtitles.srclang;
+        track.src = subtitles.url;
+        track.default = true;
+        els.playerLocalVideo.appendChild(track);
+      }
+      els.playerLocalVideo.onerror = () => {
+        showToast("This download could not be played in the built-in viewer.", "error");
+      };
       els.playerLocalVideo.load();
       els.playerLocalVideo.play().catch(() => {});
     }
@@ -2474,6 +2701,7 @@
     els.playerWebview.style.display = "";
     if (els.playerLocalVideo) {
       try { els.playerLocalVideo.pause(); } catch {}
+      els.playerLocalVideo.querySelectorAll("track").forEach((track) => track.remove());
       els.playerLocalVideo.removeAttribute("src");
       els.playerLocalVideo.load();
       els.playerLocalVideo.style.display = "none";
