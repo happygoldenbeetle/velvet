@@ -606,7 +606,12 @@ const tmdb = {
     const cache = await window.electronAPI.getNetflixTop10Cache();
     if (cache.empty || !cache.movies?.length) {
       const data = await this.netflixPKMoviesFallback().catch(() => ({ results: [] }));
-      return { results: (data.results || []).slice(0, 10).map((r) => ({ ...r, media_type: "movie" })), fallback: true };
+      return {
+        results: (data.results || [])
+          .slice(0, 10)
+          .map((r, index) => ({ ...r, media_type: "movie", netflix_rank: index + 1 })),
+        fallback: true,
+      };
     }
     return { results: cache.movies, fallback: false };
   },
@@ -616,7 +621,12 @@ const tmdb = {
     const cache = await window.electronAPI.getNetflixTop10Cache();
     if (cache.empty || !cache.tv?.length) {
       const data = await this.netflixPKTVFallback().catch(() => ({ results: [] }));
-      return { results: (data.results || []).slice(0, 10).map((r) => ({ ...r, media_type: "tv" })), fallback: true };
+      return {
+        results: (data.results || [])
+          .slice(0, 10)
+          .map((r, index) => ({ ...r, media_type: "tv", netflix_rank: index + 1 })),
+        fallback: true,
+      };
     }
     return { results: cache.tv, fallback: false };
   },

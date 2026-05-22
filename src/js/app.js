@@ -27,6 +27,8 @@
   let currentDownloadContext = null;
   const pendingDeletedDownloads = new Set();
   const DOWNLOAD_TOOL_FOLDER_KEY = "velvet_external_downloader_folder";
+  const SETTINGS_KEY = "velvet_settings";
+  let appSettings = loadSettings();
 
   const curatedRowConfigs = {
     home: [
@@ -136,6 +138,7 @@
     playerOverlay: $("#player-overlay"),
     playerWebview: $("#player-webview"),
     playerLocalVideo: $("#player-local-video"),
+    playerWakeLayer: $("#player-wake-layer"),
     playerBack: $("#player-back"),
     playerTitle: $("#player-title"),
     playerNavGroup: $("#player-nav-group"),
@@ -154,6 +157,11 @@
     searchResultsPage: $("#search-results-page"),
     searchResultsTitle: $("#search-results-title"),
     searchResultsGrid: $("#search-results-grid"),
+    settingsContainer: $("#settings-container"),
+    settingsToggle: $("#settings-toggle"),
+    settingsPanel: $("#settings-panel"),
+    heroFadeToggle: $("#setting-hero-fade"),
+    navbarStyleButtons: $$(".settings-segment-btn"),
     toastContainer: $("#toast-container"),
     playerEpisodesToggleBtn: $("#player-episodes-toggle"),
     playerEpisodesToggleContainer: $("#player-episodes-toggle-container"),
@@ -186,10 +194,38 @@
   // ═══════════════════════════════════════════
   // INITIALIZATION
   // ═══════════════════════════════════════════
+  function loadSettings() {
+    const defaults = { heroTopFade: true, navbarStyle: "classic" };
+    try {
+      return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+    } catch (err) {
+      return defaults;
+    }
+  }
+
+  function saveSettings() {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(appSettings));
+  }
+
+  function applySettings() {
+    const navbarStyle = appSettings.navbarStyle === "pill" ? "pill" : "classic";
+    document.body.classList.toggle("hero-top-fade-off", !appSettings.heroTopFade);
+    document.body.classList.toggle("navbar-style-pill", navbarStyle === "pill");
+    if (els.heroFadeToggle) {
+      els.heroFadeToggle.checked = appSettings.heroTopFade;
+    }
+    els.navbarStyleButtons?.forEach((button) => {
+      const isActive = button.dataset.navbarStyle === navbarStyle;
+      button.classList.toggle("active", isActive);
+      button.setAttribute("aria-pressed", String(isActive));
+    });
+  }
+
   async function init() {
     setupTitlebar();
     setupNavbar();
     setupSearch();
+    setupSettings();
     setupModal();
     setupPlayer();
     setupDownloads();
@@ -213,6 +249,19 @@
     $("#btn-minimize").addEventListener("click", () => window.electronAPI.minimize());
     $("#btn-maximize").addEventListener("click", () => window.electronAPI.maximize());
     $("#btn-close").addEventListener("click", () => window.electronAPI.close());
+
+    const applyAppFullscreen = (isFullscreen) => {
+      document.body.classList.toggle("app-fullscreen", Boolean(isFullscreen));
+    };
+
+    window.electronAPI?.onFullscreenChanged?.(applyAppFullscreen);
+    Promise.resolve(window.electronAPI?.isFullscreen?.())
+      .then(applyAppFullscreen)
+      .catch(() => {});
+
+    document.addEventListener("fullscreenchange", () => {
+      document.body.classList.toggle("dom-fullscreen", Boolean(document.fullscreenElement));
+    });
   }
 
   // ═══════════════════════════════════════════
@@ -234,6 +283,7 @@
     $$(".nav-link").forEach((l) => l.classList.remove("active"));
     $(`[data-page="${page}"]`).classList.add("active");
 
+    collapseSearch({ hideResults: true });
     els.searchResultsPage.style.display = "none";
     els.mainContent.style.display = "";
     prepareHeroTransition();
@@ -457,11 +507,63 @@
   // ═══════════════════════════════════════════
   // SEARCH
   // ═══════════════════════════════════════════
+  function setupSettings() {
+    applySettings();
+    if (!els.settingsContainer || !els.settingsToggle || !els.heroFadeToggle) return;
+
+    const closeSettings = () => {
+      els.settingsContainer.classList.remove("open");
+      els.settingsToggle.setAttribute("aria-expanded", "false");
+      els.settingsPanel?.setAttribute("aria-hidden", "true");
+    };
+
+    els.settingsToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const isOpen = els.settingsContainer.classList.toggle("open");
+      els.settingsToggle.setAttribute("aria-expanded", String(isOpen));
+      els.settingsPanel?.setAttribute("aria-hidden", String(!isOpen));
+      if (isOpen) collapseSearch({ hideResults: false });
+    });
+
+    els.heroFadeToggle.addEventListener("change", () => {
+      appSettings = { ...appSettings, heroTopFade: els.heroFadeToggle.checked };
+      saveSettings();
+      applySettings();
+    });
+
+    els.navbarStyleButtons?.forEach((button) => {
+      button.addEventListener("click", () => {
+        const navbarStyle = button.dataset.navbarStyle === "pill" ? "pill" : "classic";
+        appSettings = { ...appSettings, navbarStyle };
+        collapseSearch({ hideResults: false });
+        saveSettings();
+        applySettings();
+      });
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      if (!els.settingsContainer.classList.contains("open")) return;
+      if (els.settingsContainer.contains(event.target)) return;
+      closeSettings();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeSettings();
+    });
+  }
+
   function setupSearch() {
+    const closeFromOutside = (event) => {
+      if (!els.searchContainer.classList.contains("active")) return;
+      if (els.searchContainer.contains(event.target)) return;
+      collapseSearch({ hideResults: !els.searchInput.value.trim() });
+    };
+
     els.searchToggle.addEventListener("click", () => {
-      els.searchContainer.classList.toggle("active");
       if (els.searchContainer.classList.contains("active")) {
-        els.searchInput.focus();
+        collapseSearch({ hideResults: !els.searchInput.value.trim() });
+      } else {
+        openSearch();
       }
     });
 
@@ -478,12 +580,29 @@
 
     els.searchInput.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
+        e.stopPropagation();
         els.searchInput.value = "";
-        els.searchContainer.classList.remove("active");
-        els.searchResultsPage.style.display = "none";
-        els.mainContent.style.display = "";
+        collapseSearch({ hideResults: true });
       }
     });
+
+    document.addEventListener("pointerdown", closeFromOutside);
+  }
+
+  function openSearch() {
+    els.searchContainer.classList.add("active");
+    requestAnimationFrame(() => els.searchInput.focus());
+  }
+
+  function collapseSearch(options = {}) {
+    const hideResults = Boolean(options.hideResults);
+    els.searchContainer.classList.remove("active");
+    els.searchInput.blur();
+    if (hideResults) {
+      clearTimeout(searchTimeout);
+      els.searchResultsPage.style.display = "none";
+      els.mainContent.style.display = "";
+    }
   }
 
   async function performSearch(query) {
@@ -1378,6 +1497,18 @@
 
   function loadDownloadsPage() {
     els.hero.style.display = "none";
+    if (!downloadsManifest.length) {
+      els.contentRows.innerHTML = `<div class="empty-state">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        <h3>No downloads yet</h3>
+        <p>Start a movie download from the details modal, or use the episode download buttons on TV seasons.</p>
+      </div>`;
+      animateContentIn();
+      return;
+    }
+
     const active = downloadsManifest.filter((entry) => entry.status === "downloading" || entry.status === "assembling");
     const completed = downloadsManifest.filter((entry) => entry.status === "completed");
     const failed = downloadsManifest.filter((entry) => entry.status === "error" || entry.status === "cancelled");
@@ -1391,17 +1522,9 @@
     els.contentRows.innerHTML = `
       <section class="downloads-page">
         <h2 class="mylist-heading">Downloads</h2>
-        ${!downloadsManifest.length ? `
-          <div class="downloads-empty">
-            <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <h3>No downloads yet</h3>
-            <p>Start a movie download from the details modal, or use the episode download buttons on TV seasons.</p>
-          </div>
-        ` : `
-          ${active.length ? `<div class="downloads-section-title">Active</div><div class="downloads-grid">${renderCards(active)}</div>` : ""}
-          ${completed.length ? `<div class="downloads-section-title">Completed</div><div class="downloads-grid">${renderCards(completed)}</div>` : ""}
-          ${failed.length ? `<div class="downloads-section-title">Need Attention</div><div class="downloads-grid">${renderCards(failed)}</div>` : ""}
-        `}
+        ${active.length ? `<div class="downloads-section-title">Active</div><div class="downloads-grid">${renderCards(active)}</div>` : ""}
+        ${completed.length ? `<div class="downloads-section-title">Completed</div><div class="downloads-grid">${renderCards(completed)}</div>` : ""}
+        ${failed.length ? `<div class="downloads-section-title">Need Attention</div><div class="downloads-grid">${renderCards(failed)}</div>` : ""}
       </section>
     `;
 
@@ -1518,12 +1641,12 @@
         createRowHTML("Trending Now", trending.results),
         createContinueRowHTML(),
         createRankedRowHTML(
-          netflixTop10MoviesPakistan.fallback ? "Popular on Netflix in Pakistan" : "Top 10 Movies in Pakistan",
+          "Top 10 Movies in Pakistan",
           netflixTop10MoviesPakistan.results,
           "movie"
         ),
         createRankedRowHTML(
-          netflixTop10TVPakistan.fallback ? "Popular on Netflix in Pakistan" : "Top 10 TV Series in Pakistan",
+          "Top 10 TV Series in Pakistan",
           netflixTop10TVPakistan.results,
           "tv"
         ),
@@ -1605,7 +1728,7 @@
       els.contentRows.innerHTML = [
         createRowHTML("Popular Movies", popular.results, "movie"),
         createRankedRowHTML(
-          netflixTop10MoviesPakistan.fallback ? "Popular on Netflix in Pakistan" : "Top 10 Movies in Pakistan",
+          "Top 10 Movies in Pakistan",
           netflixTop10MoviesPakistan.results,
           "movie"
         ),
@@ -1664,7 +1787,7 @@
       els.contentRows.innerHTML = [
         createRowHTML("Popular TV Shows", popular.results, "tv"),
         createRankedRowHTML(
-          netflixTop10TVPakistan.fallback ? "Popular on Netflix in Pakistan" : "Top 10 TV Series in Pakistan",
+          "Top 10 TV Series in Pakistan",
           netflixTop10TVPakistan.results,
           "tv"
         ),
@@ -1956,14 +2079,26 @@
   }
 
   function createRankedCardHTML(item, forceType) {
-    const card = createCardHTML(item, forceType);
-    if (!card) return "";
     const rank = item.netflix_rank || item.rank;
-    if (!rank) return card;
-    return card.replace('class="card', 'class="card ranked-card').replace(
-      "</div>",
-      `<div class="top10-rank">${rank}</div></div>`
-    );
+    if (!rank) return createCardHTML(item, forceType);
+
+    const type = forceType || item.media_type || "movie";
+    const title = item.title || item.name || "Untitled";
+    const poster = resolvePosterSrc(item.poster_path);
+    if (!poster) return "";
+
+    const key = storeItem(item, type);
+    const safeTitle = escapeHTML(title);
+    const safeRank = escapeHTML(String(rank));
+
+    return `
+      <div class="card ranked-card skeleton" data-key="${key}" data-rank="${safeRank}" tabindex="0" aria-label="#${safeRank} ${safeTitle}">
+        <div class="top10-rank" aria-hidden="true">${safeRank}</div>
+        <div class="ranked-poster-shell">
+          <img class="card-img" src="${poster}" alt="${safeTitle}" loading="lazy" draggable="false" ondragstart="return false;" style="opacity: 0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.closest('.card').classList.remove('skeleton');" onerror="this.closest('.card').classList.remove('skeleton');" />
+        </div>
+      </div>
+    `;
   }
 
   function createRowHTML(title, items, forceType) {
@@ -2004,7 +2139,7 @@
     const resolvedRowId = rowId || "row-" + Math.random().toString(36).slice(2, 8);
 
     return `
-      <div class="content-row" id="${resolvedRowId}">
+      <div class="content-row ranked-row" id="${resolvedRowId}">
         <div class="row-header">
           <div class="row-title">${title}</div>
         </div>
@@ -2407,7 +2542,7 @@
       if (els.playerOverlay.style.display === "flex" && !els.playerEpisodesPanel.classList.contains("open")) {
         els.playerOverlay.classList.add("chrome-hidden");
       }
-    }, 2400);
+    }, 1500);
   }
 
   function clearPlayerLoadTimer() {
@@ -2508,19 +2643,33 @@
 
   function setupPlayer() {
     els.playerBack.addEventListener("click", closePlayer);
+
+    const revealPlayerChrome = () => {
+      if (els.playerOverlay.style.display === "flex") showPlayerChrome(true);
+    };
+
+    els.playerOverlay.addEventListener("mousemove", revealPlayerChrome);
+    els.playerWakeLayer?.addEventListener("pointermove", revealPlayerChrome);
+    els.playerWakeLayer?.addEventListener("mousemove", revealPlayerChrome);
+    els.playerWakeLayer?.addEventListener("click", revealPlayerChrome);
+
     if (els.playerLocalVideo) {
       els.playerLocalVideo.addEventListener("ended", () => {
         try {
           els.playerLocalVideo.currentTime = 0;
         } catch {}
       });
+      els.playerLocalVideo.addEventListener("play", () => showPlayerChrome(true));
+      els.playerLocalVideo.addEventListener("fullscreenchange", () => showPlayerChrome(true));
     }
     els.playerEpisodesToggleBtn?.addEventListener("click", () => {
       els.playerEpisodesPanel.classList.toggle("open");
+      showPlayerChrome(!els.playerEpisodesPanel.classList.contains("open"));
     });
 
     els.playerEpisodesClose?.addEventListener("click", () => {
       els.playerEpisodesPanel.classList.remove("open");
+      showPlayerChrome(true);
     });
   }
 
@@ -2551,6 +2700,7 @@
     els.playerWebview.style.display = "";
     els.playerWebview.setAttribute("src", url);
     els.playerOverlay.style.display = "flex";
+    showPlayerChrome(true);
     document.body.style.overflow = "hidden";
 
     if (item && item.media_type === "tv" && item.number_of_seasons > 0) {
@@ -2616,6 +2766,7 @@
     els.playerOverlay.style.display = "flex";
     els.playerEpisodesToggleContainer.style.display = "none";
     els.playerEpisodesPanel.classList.remove("open");
+    showPlayerChrome(true);
     document.body.style.overflow = "hidden";
   }
 

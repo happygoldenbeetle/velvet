@@ -174,22 +174,54 @@ function capturePlayerMediaRequest(details) {
   }
 }
 
-function attachFullscreenShortcut(webContents) {
+function attachFullscreenShortcut(webContents, options = {}) {
   webContents.on("before-input-event", (event, input) => {
     if (!mainWindow) return;
     if (input.type !== "keyDown") return;
 
     if (input.key === "F11") {
       event.preventDefault();
-      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+      setMainWindowFullscreen(!mainWindow.isFullScreen());
       return;
     }
 
     if (input.key === "Escape" && mainWindow.isFullScreen()) {
       event.preventDefault();
-      mainWindow.setFullScreen(false);
+      setMainWindowFullscreen(false);
+    }
+
+    if (
+      options.syncVideoFullscreenKeys &&
+      input.key?.toLowerCase() === "f" &&
+      !input.control &&
+      !input.meta &&
+      !input.alt
+    ) {
+      setTimeout(() => setMainWindowFullscreen(true), 80);
     }
   });
+}
+
+function attachHtmlFullscreenBridge(webContents) {
+  webContents.on("enter-html-full-screen", () => {
+    setMainWindowFullscreen(true);
+  });
+
+  webContents.on("leave-html-full-screen", () => {
+    setMainWindowFullscreen(false);
+  });
+}
+
+function emitFullscreenState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("window-fullscreen-changed", mainWindow.isFullScreen());
+}
+
+function setMainWindowFullscreen(isFullscreen) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setFullScreen(Boolean(isFullscreen));
+  setTimeout(emitFullscreenState, 0);
+  setTimeout(emitFullscreenState, 120);
 }
 
 function createWindow() {
@@ -218,13 +250,10 @@ function createWindow() {
   });
 
   attachFullscreenShortcut(mainWindow.webContents);
+  attachHtmlFullscreenBridge(mainWindow.webContents);
 
-  const sendFullscreenState = (isFullscreen) => {
-    mainWindow.webContents.send("window-fullscreen-changed", isFullscreen);
-  };
-
-  mainWindow.on("enter-full-screen", () => sendFullscreenState(true));
-  mainWindow.on("leave-full-screen", () => sendFullscreenState(false));
+  mainWindow.on("enter-full-screen", emitFullscreenState);
+  mainWindow.on("leave-full-screen", emitFullscreenState);
 
   // Spawn background Top 10 cache refresh (detached, non-blocking)
   const top10Script = path.join(__dirname, "fetch-top10.js");
@@ -261,7 +290,8 @@ function createWindow() {
       playerWebContentsIds.delete(guestContents.id);
     });
 
-    attachFullscreenShortcut(guestContents);
+    attachFullscreenShortcut(guestContents, { syncVideoFullscreenKeys: true });
+    attachHtmlFullscreenBridge(guestContents);
     guestContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
     guestContents.on("will-navigate", (details) => {
@@ -290,9 +320,10 @@ ipcMain.on("window-maximize", () => {
 });
 ipcMain.on("window-toggle-fullscreen", () => {
   if (!mainWindow) return;
-  mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  setMainWindowFullscreen(!mainWindow.isFullScreen());
 });
 ipcMain.on("window-close", () => mainWindow?.close());
+ipcMain.handle("window-is-fullscreen", () => Boolean(mainWindow?.isFullScreen()));
 
 // ── Top 10 cache reader ────────────────────────────────────────────────────
 const TOP10_CACHE_PATH = path.join(__dirname, "top10_cache.json");

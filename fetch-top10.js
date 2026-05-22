@@ -21,9 +21,19 @@ function isCacheFresh() {
     const raw = fs.readFileSync(CACHE_PATH, "utf8");
     const cache = JSON.parse(raw);
     if (!cache.timestamp) return false;
+    if (!cache.movies?.length || !cache.tv?.length) return false;
     return Date.now() - cache.timestamp < CACHE_MAX_AGE_MS;
   } catch {
     return false;
+  }
+}
+
+function readExistingCache() {
+  try {
+    if (!fs.existsSync(CACHE_PATH)) return null;
+    return JSON.parse(fs.readFileSync(CACHE_PATH, "utf8"));
+  } catch {
+    return null;
   }
 }
 
@@ -34,7 +44,7 @@ async function fetchText(url) {
       "user-agent": "Mozilla/5.0 Cinemax",
       accept: "text/html,application/xhtml+xml",
     },
-    signal: AbortSignal.timeout(12000),
+    signal: AbortSignal.timeout(25000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return res.text();
@@ -182,7 +192,15 @@ async function fetchAndResolve(url, type) {
       }),
     ]);
 
-    const cache = { timestamp: Date.now(), movies, tv };
+    const existing = readExistingCache();
+    const cache = {
+      timestamp: Date.now(),
+      movies: movies.length ? movies : existing?.movies || [],
+      tv: tv.length ? tv : existing?.tv || [],
+    };
+    if (!cache.movies.length && !cache.tv.length) {
+      console.warn("[top10] No Top 10 entries resolved; keeping cache empty so the app can use fallback rows.");
+    }
     fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2), "utf8");
     console.log(`[top10] Cache written — ${movies.length} movies, ${tv.length} TV shows`);
   } catch (err) {

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   maximize: () => ipcRenderer.send("window-maximize"),
   toggleFullscreen: () => ipcRenderer.send("window-toggle-fullscreen"),
   close: () => ipcRenderer.send("window-close"),
+  isFullscreen: () => ipcRenderer.invoke("window-is-fullscreen"),
 
   // ── Data bridges ──
   getNetflixTop10Cache: () => ipcRenderer.invoke("netflix-top10-cache"),
