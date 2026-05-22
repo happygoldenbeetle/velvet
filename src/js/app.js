@@ -25,10 +25,13 @@
   let downloadsManifest = [];
   let downloadsListenersAttached = false;
   let currentDownloadContext = null;
+  let localDiscordContext = null;
   const pendingDeletedDownloads = new Set();
   const DOWNLOAD_TOOL_FOLDER_KEY = "velvet_external_downloader_folder";
   const SETTINGS_KEY = "velvet_settings";
   let appSettings = loadSettings();
+  let discordSettingsTimer = null;
+  let lastDiscordActivity = null;
 
   const curatedRowConfigs = {
     home: [
@@ -161,6 +164,10 @@
     settingsToggle: $("#settings-toggle"),
     settingsPanel: $("#settings-panel"),
     heroFadeToggle: $("#setting-hero-fade"),
+    discordPresenceToggle: $("#setting-discord-presence"),
+    discordClientIdInput: $("#setting-discord-client-id"),
+    discordImageKeyInput: $("#setting-discord-image-key"),
+    discordStatus: $("#setting-discord-status"),
     navbarStyleButtons: $$(".settings-segment-btn"),
     toastContainer: $("#toast-container"),
     playerEpisodesToggleBtn: $("#player-episodes-toggle"),
@@ -195,7 +202,13 @@
   // INITIALIZATION
   // ═══════════════════════════════════════════
   function loadSettings() {
-    const defaults = { heroTopFade: true, navbarStyle: "classic" };
+    const defaults = {
+      heroTopFade: true,
+      navbarStyle: "classic",
+      discordPresence: false,
+      discordClientId: "",
+      discordImageKey: "",
+    };
     try {
       return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
     } catch (err) {
@@ -214,11 +227,145 @@
     if (els.heroFadeToggle) {
       els.heroFadeToggle.checked = appSettings.heroTopFade;
     }
+    if (els.discordPresenceToggle) {
+      els.discordPresenceToggle.checked = Boolean(appSettings.discordPresence);
+    }
+    if (els.discordClientIdInput && els.discordClientIdInput.value !== (appSettings.discordClientId || "")) {
+      els.discordClientIdInput.value = appSettings.discordClientId || "";
+    }
+    if (els.discordImageKeyInput && els.discordImageKeyInput.value !== (appSettings.discordImageKey || "")) {
+      els.discordImageKeyInput.value = appSettings.discordImageKey || "";
+    }
     els.navbarStyleButtons?.forEach((button) => {
       const isActive = button.dataset.navbarStyle === navbarStyle;
       button.classList.toggle("active", isActive);
       button.setAttribute("aria-pressed", String(isActive));
     });
+  }
+
+  function updateDiscordStatusLabel(status) {
+    if (!els.discordStatus) return;
+    if (!appSettings.discordPresence) {
+      els.discordStatus.textContent = "Off";
+      return;
+    }
+    els.discordStatus.textContent = status?.message || (status?.connected ? "Connected" : "Disconnected");
+  }
+
+  async function configureDiscordPresence(pushCachedActivity = false) {
+    if (!window.electronAPI?.configureDiscordPresence) return;
+    try {
+      const status = await window.electronAPI.configureDiscordPresence({
+        enabled: Boolean(appSettings.discordPresence),
+        clientId: appSettings.discordClientId || "",
+      });
+      updateDiscordStatusLabel(status);
+      if (pushCachedActivity && status?.success && lastDiscordActivity) {
+        await publishDiscordActivity(lastDiscordActivity, { remember: false });
+      }
+    } catch (err) {
+      updateDiscordStatusLabel({ message: err.message || "Disconnected" });
+    }
+  }
+
+  function queueDiscordPresenceConfig() {
+    clearTimeout(discordSettingsTimer);
+    discordSettingsTimer = setTimeout(() => configureDiscordPresence(true), 450);
+  }
+
+  function getDiscordMediaLabel(item, options = {}) {
+    if (options.source === "download") return "Offline download";
+    if (currentPage === "anime" || isAnimeMediaItem(item)) return "Anime";
+    if (item?.media_type === "tv" || options.season || options.episode) return "Series";
+    if (item?.media_type === "manga") return "Manga";
+    return "Movie";
+  }
+
+  function buildDiscordActivity(item, options = {}) {
+    const title = item?.title || item?.name || options.title || "Velvet";
+    const mediaLabel = getDiscordMediaLabel(item, options);
+    let state = mediaLabel;
+    if (options.season && options.episode) {
+      state = `${mediaLabel} - S${options.season}E${options.episode}`;
+      if (options.episodeMeta?.name) state += ` - ${options.episodeMeta.name}`;
+    }
+    const dynamicImage =
+      options.largeImageKey ||
+      (item?.poster_path ? (/^https?:\/\//i.test(item.poster_path) ? item.poster_path : tmdb.poster(item.poster_path)) : "") ||
+      resolveBackdropSrc(item?.backdrop_path);
+    const progressSeconds = Number(options.progressSeconds);
+    const shouldShowTimeline = options.paused !== true && Number.isFinite(progressSeconds);
+    const activity = {
+      title,
+      state,
+      largeImageText: title,
+      largeImageKey: dynamicImage || appSettings.discordImageKey || "",
+      force: Boolean(options.force),
+    };
+    if (shouldShowTimeline) {
+      activity.startTimestamp = Date.now() - Math.max(0, progressSeconds) * 1000;
+    }
+    return activity;
+  }
+
+  function buildDownloadDiscordItem(entry = {}) {
+    entry = entry || {};
+    return {
+      title: entry.title,
+      name: entry.name,
+      media_type: entry.media_type,
+      poster_path: entry.poster_path,
+      backdrop_path: entry.backdrop_path,
+    };
+  }
+
+  async function publishDiscordActivity(payload, options = {}) {
+    if (options.remember !== false) {
+      lastDiscordActivity = payload;
+    }
+    if (!appSettings.discordPresence || !window.electronAPI?.setDiscordActivity) return;
+    try {
+      const status = await window.electronAPI.setDiscordActivity(payload);
+      updateDiscordStatusLabel(status);
+    } catch (err) {
+      updateDiscordStatusLabel({ message: err.message || "Disconnected" });
+    }
+  }
+
+  function updateDiscordActivity(item, options = {}) {
+    publishDiscordActivity(buildDiscordActivity(item, options));
+  }
+
+  function syncDiscordActivityFromWatchSession(options = {}) {
+    if (!activeWatchSession?.item) return;
+    updateActiveWatchProgress(false);
+    updateDiscordActivity(activeWatchSession.item, {
+      title: activeWatchSession.title,
+      season: activeWatchSession.season,
+      episode: activeWatchSession.episode,
+      episodeMeta: activeWatchSession.episodeMeta,
+      progressSeconds: activeWatchSession.progressSeconds,
+      paused: options.paused,
+      force: options.force,
+    });
+  }
+
+  function syncLocalVideoDiscordActivity(options = {}) {
+    if (!localDiscordContext || !els.playerLocalVideo) return;
+    if (els.playerOverlay.style.display !== "flex" || els.playerLocalVideo.style.display === "none") return;
+    const currentTime = Number.isFinite(els.playerLocalVideo.currentTime) ? els.playerLocalVideo.currentTime : 0;
+    updateDiscordActivity(localDiscordContext.item, {
+      title: localDiscordContext.title,
+      source: "download",
+      progressSeconds: currentTime,
+      paused: options.paused ?? els.playerLocalVideo.paused,
+      force: options.force,
+    });
+  }
+
+  function clearDiscordActivity() {
+    lastDiscordActivity = null;
+    window.electronAPI?.clearDiscordActivity?.().catch(() => {});
   }
 
   async function init() {
@@ -336,6 +483,12 @@
   function isBlockedAnimeHero(item) {
     const title = `${item?.name || ""} ${item?.original_name || ""}`.toLowerCase();
     return title.includes("overflow");
+  }
+
+  function isAnimeMediaItem(item) {
+    const genreIds = Array.isArray(item?.genre_ids) ? item.genre_ids : [];
+    const genreNames = Array.isArray(item?.genres) ? item.genres.map((genre) => String(genre.name || "").toLowerCase()) : [];
+    return item?.original_language === "ja" && (genreIds.includes(16) || genreNames.includes("animation"));
   }
 
   function normalizeAgeRating(value = "") {
@@ -469,9 +622,12 @@
         heroLogoCache.set(logoCacheKey, logo.url);
         return logo.url;
       }
-    } catch (err) {}
+      heroLogoCache.set(logoCacheKey, null);
+      return null;
+    } catch (err) {
+      return null;
+    }
 
-    heroLogoCache.set(logoCacheKey, null);
     return null;
   }
 
@@ -510,6 +666,7 @@
   function setupSettings() {
     applySettings();
     if (!els.settingsContainer || !els.settingsToggle || !els.heroFadeToggle) return;
+    window.electronAPI?.onDiscordPresenceStatus?.(updateDiscordStatusLabel);
 
     const closeSettings = () => {
       els.settingsContainer.classList.remove("open");
@@ -531,6 +688,34 @@
       applySettings();
     });
 
+    els.discordPresenceToggle?.addEventListener("change", () => {
+      appSettings = { ...appSettings, discordPresence: els.discordPresenceToggle.checked };
+      saveSettings();
+      applySettings();
+      configureDiscordPresence(true);
+      if (!els.discordPresenceToggle.checked) clearDiscordActivity();
+    });
+
+    els.discordClientIdInput?.addEventListener("input", () => {
+      appSettings = { ...appSettings, discordClientId: els.discordClientIdInput.value.trim() };
+      saveSettings();
+      if (appSettings.discordPresence) {
+        updateDiscordStatusLabel({ message: "Connecting..." });
+        queueDiscordPresenceConfig();
+      }
+    });
+
+    els.discordImageKeyInput?.addEventListener("input", () => {
+      appSettings = { ...appSettings, discordImageKey: els.discordImageKeyInput.value.trim() };
+      saveSettings();
+      if (appSettings.discordPresence && lastDiscordActivity) {
+        publishDiscordActivity(
+          { ...lastDiscordActivity, largeImageKey: appSettings.discordImageKey || lastDiscordActivity.largeImageKey || "" },
+          { remember: false }
+        );
+      }
+    });
+
     els.navbarStyleButtons?.forEach((button) => {
       button.addEventListener("click", () => {
         const navbarStyle = button.dataset.navbarStyle === "pill" ? "pill" : "classic";
@@ -550,6 +735,8 @@
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") closeSettings();
     });
+
+    configureDiscordPresence(false);
   }
 
   function setupSearch() {
@@ -776,7 +963,7 @@
   function updateActiveWatchProgress(save = true) {
     if (!activeWatchSession) return;
     const now = Date.now();
-    const elapsed = Math.max(0, (now - activeWatchSession.lastTickAt) / 1000);
+    const elapsed = activeWatchSession.isPlaying ? Math.max(0, (now - activeWatchSession.lastTickAt) / 1000) : 0;
     activeWatchSession.lastTickAt = now;
     activeWatchSession.progressSeconds = Math.min(
       activeWatchSession.progressSeconds + elapsed,
@@ -791,6 +978,7 @@
   function startWatchSession(item, options = {}) {
     stopWatchSession(true);
     const durationSeconds = getDurationSeconds(item, options.episodeMeta);
+    const startTime = Number.isFinite(Number(options.startTime)) ? Number(options.startTime) : 0;
 
     activeWatchSession = {
       item,
@@ -798,13 +986,50 @@
       episode: options.episode || null,
       episodeMeta: options.episodeMeta || null,
       title: options.title || item.title || item.name || "",
-      progressSeconds: Math.min(options.startTime || 0, Math.max(durationSeconds - 10, 0)),
+      progressSeconds: Math.min(startTime, Math.max(durationSeconds - 10, 0)),
       durationSeconds,
       lastTickAt: Date.now(),
+      isPlaying: false,
     };
 
     if (watchProgressTimer) clearInterval(watchProgressTimer);
     watchProgressTimer = setInterval(() => updateActiveWatchProgress(true), 5000);
+  }
+
+  function setWatchSessionPlaying(isPlaying) {
+    if (!activeWatchSession) return false;
+    const nextPlaying = Boolean(isPlaying);
+    updateActiveWatchProgress(false);
+    if (activeWatchSession.isPlaying === nextPlaying) return false;
+    activeWatchSession.isPlaying = nextPlaying;
+    activeWatchSession.lastTickAt = Date.now();
+    return true;
+  }
+
+  function handleEmbeddedPlaybackState(payload = {}) {
+    if (!activeWatchSession) return;
+    const eventName = String(payload.event || "");
+    const currentTime = Number(payload.currentTime);
+    if (Number.isFinite(currentTime)) {
+      activeWatchSession.progressSeconds = Math.min(
+        Math.max(0, currentTime),
+        activeWatchSession.durationSeconds
+      );
+      activeWatchSession.lastTickAt = Date.now();
+    }
+
+    const nextPlaying =
+      payload.paused === false &&
+      payload.ended !== true &&
+      eventName !== "waiting" &&
+      eventName !== "pause";
+
+    activeWatchSession.isPlaying = nextPlaying;
+    activeWatchSession.lastTickAt = Date.now();
+
+    if (["playing", "pause", "waiting", "seeked", "ended"].includes(eventName)) {
+      syncDiscordActivityFromWatchSession({ paused: !nextPlaying, force: true });
+    }
   }
 
   function stopWatchSession(save = true) {
@@ -915,6 +1140,9 @@
             episode: lastCapturedStream.episode,
           },
         });
+        if (setWatchSessionPlaying(true)) {
+          syncDiscordActivityFromWatchSession({ paused: false, force: true });
+        }
         refreshDownloadUI();
       });
     }
@@ -942,7 +1170,16 @@
             episode: lastCapturedStream.episode,
           },
         });
+        if (setWatchSessionPlaying(true)) {
+          syncDiscordActivityFromWatchSession({ paused: false, force: true });
+        }
         refreshDownloadUI();
+      });
+    }
+
+    if (window.electronAPI.onPlayerPlaybackState) {
+      window.electronAPI.onPlayerPlaybackState((payload) => {
+        handleEmbeddedPlaybackState(payload);
       });
     }
 
@@ -1465,7 +1702,7 @@
           if (action === "watch-download" && entry.outputPath) {
             openLocalVideo(entry.outputPath, entry.media_type === "tv"
               ? `${entry.name || entry.title || "Untitled"} S${String(entry.season || 1).padStart(2, "0")}E${String(entry.episode || 1).padStart(2, "0")}`
-              : entry.title || entry.name || "Untitled");
+              : entry.title || entry.name || "Untitled", entry);
           } else if (action === "cancel-download") {
             window.electronAPI.cancelDownload(entry.id);
           } else if (action === "retry-download") {
@@ -1539,7 +1776,7 @@
 
       const watch = () => {
         if (entry.status === "completed" && entry.outputPath) {
-          openLocalVideo(entry.outputPath, getDownloadTitle(entry));
+          openLocalVideo(entry.outputPath, getDownloadTitle(entry), entry);
         }
       };
 
@@ -1559,7 +1796,7 @@
           event.stopPropagation();
           const action = button.dataset.action;
           if (action === "watch-download" && entry.outputPath) {
-            openLocalVideo(entry.outputPath, getDownloadTitle(entry));
+            openLocalVideo(entry.outputPath, getDownloadTitle(entry), entry);
           } else if (action === "cancel-download") {
             entry.message = "Cancelling...";
             persistDownloadsManifest();
@@ -2607,6 +2844,7 @@
   function playPlayerEpisode(tvItem, season, episode, title, episodeMeta = null) {
     stopWatchSession(true);
     lastCapturedStream = null;
+    localDiscordContext = null;
     const resume = getContinueEntry(tvItem, season, episode)?.progressSeconds || 0;
     playerState.item = tvItem;
     playerState.season = season;
@@ -2622,6 +2860,15 @@
       episodeMeta,
       title,
       startTime: resume,
+    });
+    updateDiscordActivity(tvItem, {
+      title,
+      season,
+      episode,
+      episodeMeta,
+      progressSeconds: resume,
+      paused: true,
+      force: true,
     });
     els.playerWebview.setAttribute("src", tmdb.getTVEmbed(tvItem.id, season, episode, resume));
     syncActivePlayerEpisode();
@@ -2658,8 +2905,22 @@
         try {
           els.playerLocalVideo.currentTime = 0;
         } catch {}
+        syncLocalVideoDiscordActivity({ paused: true, force: true });
       });
       els.playerLocalVideo.addEventListener("play", () => showPlayerChrome(true));
+      els.playerLocalVideo.addEventListener("playing", () => {
+        showPlayerChrome(true);
+        syncLocalVideoDiscordActivity({ paused: false, force: true });
+      });
+      els.playerLocalVideo.addEventListener("pause", () => {
+        syncLocalVideoDiscordActivity({ paused: true, force: true });
+      });
+      els.playerLocalVideo.addEventListener("waiting", () => {
+        syncLocalVideoDiscordActivity({ paused: true, force: true });
+      });
+      els.playerLocalVideo.addEventListener("seeked", () => {
+        syncLocalVideoDiscordActivity({ paused: els.playerLocalVideo.paused, force: true });
+      });
       els.playerLocalVideo.addEventListener("fullscreenchange", () => showPlayerChrome(true));
     }
     els.playerEpisodesToggleBtn?.addEventListener("click", () => {
@@ -2682,6 +2943,7 @@
   function openPlayer(url, title, item, currentSeason = null, currentEpisode = null, episodeMeta = null, startTime = 0) {
     closeModal();
     lastCapturedStream = null;
+    localDiscordContext = null;
     els.playerTitle.textContent = title || "";
     if (els.playerLocalVideo) {
       els.playerLocalVideo.pause();
@@ -2696,6 +2958,15 @@
       episodeMeta,
       title,
       startTime,
+    });
+    updateDiscordActivity(item, {
+      title,
+      season: currentSeason,
+      episode: currentEpisode,
+      episodeMeta,
+      progressSeconds: startTime,
+      paused: true,
+      force: true,
     });
     els.playerWebview.style.display = "";
     els.playerWebview.setAttribute("src", url);
@@ -2721,7 +2992,7 @@
     }
   }
 
-  async function openLocalVideo(filePath, title) {
+  async function openLocalVideo(filePath, title, downloadEntry = null) {
     closeModal();
     stopWatchSession(true);
     lastCapturedStream = null;
@@ -2738,6 +3009,17 @@
     }
 
     els.playerTitle.textContent = title || "";
+    localDiscordContext = {
+      item: buildDownloadDiscordItem(downloadEntry),
+      title: title || downloadEntry?.title || downloadEntry?.name || "Offline download",
+    };
+    updateDiscordActivity(localDiscordContext.item, {
+      title: localDiscordContext.title,
+      source: "download",
+      progressSeconds: 0,
+      paused: true,
+      force: true,
+    });
     els.playerWebview.setAttribute("src", "about:blank");
     els.playerWebview.style.display = "none";
     if (els.playerLocalVideo) {
@@ -2844,11 +3126,15 @@
 
   function closePlayer() {
     stopWatchSession(true);
+    localDiscordContext = null;
     clearPlayerChromeTimer();
     hidePlayerStatus();
     els.playerOverlay.style.display = "none";
     els.playerOverlay.classList.remove("chrome-hidden");
-    els.playerWebview.src = "about:blank";
+    try {
+      els.playerWebview.stop?.();
+    } catch {}
+    els.playerWebview.setAttribute("src", "about:blank");
     els.playerWebview.style.display = "";
     if (els.playerLocalVideo) {
       try { els.playerLocalVideo.pause(); } catch {}
@@ -2861,6 +3147,7 @@
     els.playerEpisodesToggleContainer.style.display = "none";
     if (els.playerNavGroup) els.playerNavGroup.style.display = "none";
     playerState = { item: null, season: null, episode: null, episodes: [], title: "" };
+    clearDiscordActivity();
     document.body.style.overflow = "";
     if (currentPage === "home") loadHomePage();
   }
@@ -2868,6 +3155,9 @@
   // ═══════════════════════════════════════════
   // BOOT
   // ═══════════════════════════════════════════
-  window.addEventListener("beforeunload", () => stopWatchSession(true));
+  window.addEventListener("beforeunload", () => {
+    stopWatchSession(true);
+    clearDiscordActivity();
+  });
   document.addEventListener("DOMContentLoaded", init);
 })();

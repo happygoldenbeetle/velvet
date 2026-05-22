@@ -519,40 +519,38 @@ const tmdb = {
 
     const data = await this.fetchExternalJson(url.toString());
     const candidates = (data.data || []).slice(0, Math.max(limit + 4, 14));
-    const seen = new Set();
-    const resolvedCandidates = await Promise.all(
-      candidates.map(async (candidate) => {
-        const query = candidate.title_english || candidate.title || candidate.title_japanese;
-        if (!query) return null;
 
-        const preferredOrder =
-          candidate.type === "Movie" ? ["movie", "tv"] : ["tv", "movie"];
+    const resolveCandidate = async (candidate) => {
+      const query = candidate.title_english || candidate.title || candidate.title_japanese;
+      if (!query) return null;
 
-        for (const type of preferredOrder) {
-          const searchResults =
-            type === "tv" ? await this.searchTV(query) : await this.searchMovies(query);
-          const best = (searchResults.results || []).find((item) => item.poster_path);
-          if (best) {
-            return {
-              ...best,
-              media_type: type,
-            };
-          }
+      const preferredOrder = candidate.type === "Movie" ? ["movie", "tv"] : ["tv", "movie"];
+      for (const type of preferredOrder) {
+        const searchResults = type === "tv" ? await this.searchTV(query) : await this.searchMovies(query);
+        const best = (searchResults.results || []).find((item) => item.poster_path);
+        if (best) {
+          return { ...best, media_type: type };
         }
+      }
 
-        return null;
-      })
-    );
+      return null;
+    };
 
+    const seen = new Set();
     const resolved = [];
-    for (const item of resolvedCandidates) {
-      if (!item) continue;
-      if (seen.has(`${item.media_type}-${item.id}`)) continue;
-      seen.add(`${item.media_type}-${item.id}`);
-      resolved.push({
-        ...item,
-        rank: resolved.length + 1,
-      });
+    for (let index = 0; index < candidates.length && resolved.length < limit; index += 3) {
+      const batch = candidates.slice(index, index + 3);
+      const batchResults = await Promise.all(batch.map((candidate) => resolveCandidate(candidate)));
+      for (const item of batchResults) {
+        if (!item) continue;
+        if (seen.has(`${item.media_type}-${item.id}`)) continue;
+        seen.add(`${item.media_type}-${item.id}`);
+        resolved.push({
+          ...item,
+          rank: resolved.length + 1,
+        });
+        if (resolved.length >= limit) break;
+      }
       if (resolved.length >= limit) break;
     }
 

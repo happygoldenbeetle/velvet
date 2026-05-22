@@ -11,6 +11,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── Data bridges ──
   getNetflixTop10Cache: () => ipcRenderer.invoke("netflix-top10-cache"),
   mangadexJson: (url) => ipcRenderer.invoke("mangadex-json", url),
+  configureDiscordPresence: (options) => ipcRenderer.invoke("discord-presence-configure", options),
+  setDiscordActivity: (payload) => ipcRenderer.invoke("discord-presence-set-activity", payload),
+  clearDiscordActivity: () => ipcRenderer.invoke("discord-presence-clear"),
+  getDiscordPresenceStatus: () => ipcRenderer.invoke("discord-presence-status"),
+  onDiscordPresenceStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("discord-presence-status", listener);
+    return () => ipcRenderer.removeListener("discord-presence-status", listener);
+  },
 
   // ── Window state events ──
   onFullscreenChanged: (callback) => {
@@ -30,6 +39,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const listener = (_event, url) => callback(url);
     ipcRenderer.on("mp4-found", listener);
     return () => ipcRenderer.removeListener("mp4-found", listener);
+  },
+  onPlayerPlaybackState: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("player-playback-state", listener);
+    return () => ipcRenderer.removeListener("player-playback-state", listener);
   },
   fetchManifest: (m3u8Url) => ipcRenderer.invoke("download-fetch-manifest", m3u8Url),
 

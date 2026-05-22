@@ -2,6 +2,8 @@ const { app, BrowserWindow, session, ipcMain, dialog, shell } = require("electro
 const path = require("path");
 const fs = require("fs");
 const { spawn, spawnSync } = require("child_process");
+const DiscordRPC = require("discord-rpc");
+const { pid: getDiscordPid } = require("discord-rpc/src/util");
 
 // ──────────────────────────────────────────────
 // Ad-blocker: known ad/tracker domain patterns
@@ -147,8 +149,318 @@ const PLAYER_WATERMARK_SCRIPT = `
   })();
 `;
 
+const PLAYER_STATE_PREFIX = "__VELVET_PLAYER_STATE__";
+const PLAYER_STATE_SCRIPT = `
+  (() => {
+    if (window.__velvetPlaybackMonitorInstalled) return;
+    window.__velvetPlaybackMonitorInstalled = true;
+    const prefix = ${JSON.stringify("__VELVET_PLAYER_STATE__")};
+    let currentVideo = null;
+    let lastPayload = "";
+    let lastEmitAt = 0;
+    let lastTimeupdateAt = 0;
+
+    const emit = (eventName, video) => {
+      if (!video) return;
+      const now = Date.now();
+      if (eventName === "timeupdate" && now - lastTimeupdateAt < 4000) return;
+      if (eventName === "timeupdate") lastTimeupdateAt = now;
+
+      const payload = {
+        event: eventName,
+        currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+        duration: Number.isFinite(video.duration) ? video.duration : 0,
+        paused: Boolean(video.paused),
+        ended: Boolean(video.ended),
+        readyState: video.readyState || 0,
+      };
+      const serialized = JSON.stringify(payload);
+      if (serialized === lastPayload && now - lastEmitAt < 1000) return;
+      lastPayload = serialized;
+      lastEmitAt = now;
+      console.log(prefix + serialized);
+    };
+
+    const attach = (video) => {
+      if (!video || video === currentVideo) return;
+      currentVideo = video;
+      ["playing", "play", "pause", "waiting", "seeked", "seeking", "ended", "loadedmetadata", "canplay", "timeupdate"].forEach((eventName) => {
+        video.addEventListener(eventName, () => emit(eventName, video), { passive: true });
+      });
+      emit(video.paused ? "pause" : "playing", video);
+    };
+
+    const scan = () => attach(document.querySelector("video"));
+    scan();
+    setInterval(scan, 1000);
+  })();
+`;
+
 let mainWindow;
 const playerWebContentsIds = new Set();
+let discordClient = null;
+let discordClientId = "";
+let discordEnabled = false;
+let discordReady = false;
+let discordLoginPromise = null;
+let discordActivity = null;
+let discordStatusMessage = "Off";
+let discordSessionId = 0;
+let discordLastActivitySetAt = 0;
+let discordActivityApplyTimer = null;
+let discordRawActivitySupported = true;
+const DISCORD_ACTIVITY_MIN_INTERVAL_MS = 15000;
+
+function cleanDiscordText(value, fallback = "", maxLength = 128) {
+  const cleanedValue = String(value ?? "").replace(/\s+/g, " ").trim();
+  const cleanedFallback = String(fallback ?? "").replace(/\s+/g, " ").trim();
+  const text = cleanedValue || cleanedFallback;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
+}
+
+function cleanDiscordImageValue(value) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) {
+    return text.length <= 313 ? text : "";
+  }
+  return cleanDiscordText(text, "", 32);
+}
+
+function normalizeDiscordClientId(value) {
+  return String(value || "").trim();
+}
+
+function isValidDiscordClientId(value) {
+  return /^\d{17,22}$/.test(value);
+}
+
+function getDiscordPresenceStatus() {
+  return {
+    enabled: discordEnabled,
+    connected: discordReady,
+    configured: isValidDiscordClientId(discordClientId),
+    message: discordStatusMessage,
+  };
+}
+
+function emitDiscordPresenceStatus() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("discord-presence-status", getDiscordPresenceStatus());
+}
+
+function clearDiscordActivityApplyTimer() {
+  clearTimeout(discordActivityApplyTimer);
+  discordActivityApplyTimer = null;
+}
+
+function withDiscordTimeout(promise, timeoutMs = 1200) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([
+    Promise.resolve(promise),
+    timeout,
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function destroyDiscordClient() {
+  discordSessionId += 1;
+  discordLoginPromise = null;
+  clearDiscordActivityApplyTimer();
+  discordLastActivitySetAt = 0;
+  discordRawActivitySupported = true;
+  const wasReady = discordReady;
+  discordReady = false;
+  const client = discordClient;
+  discordClient = null;
+  if (!client) return;
+  try {
+    if (wasReady) {
+      await withDiscordTimeout(client.clearActivity());
+    }
+  } catch {}
+  try {
+    await withDiscordTimeout(client.destroy());
+  } catch {}
+}
+
+function buildDiscordActivity(payload = {}) {
+  const title = cleanDiscordText(payload.title || payload.details, "Watching on Velvet");
+  const state = cleanDiscordText(payload.state, "Watching");
+  const activity = {
+    details: title,
+    state,
+    instance: false,
+    force: Boolean(payload.force),
+  };
+  if (Number.isFinite(payload.startTimestamp)) {
+    activity.startTimestamp = payload.startTimestamp;
+  }
+  if (Number.isFinite(payload.endTimestamp)) {
+    activity.endTimestamp = payload.endTimestamp;
+  }
+
+  const largeImageKey = cleanDiscordImageValue(payload.largeImageKey);
+  if (largeImageKey) {
+    activity.largeImageKey = largeImageKey;
+    activity.largeImageText = cleanDiscordText(payload.largeImageText || "Velvet", "Velvet");
+  }
+
+  return activity;
+}
+
+function toDiscordRpcActivity(activity = {}) {
+  const rpcActivity = {
+    type: 3,
+    details: activity.details,
+    state: activity.state,
+    instance: Boolean(activity.instance),
+  };
+
+  if (activity.startTimestamp || activity.endTimestamp) {
+    rpcActivity.timestamps = {
+      start: activity.startTimestamp,
+      end: activity.endTimestamp,
+    };
+  }
+
+  if (activity.largeImageKey || activity.largeImageText || activity.smallImageKey || activity.smallImageText) {
+    rpcActivity.assets = {
+      large_image: activity.largeImageKey,
+      large_text: activity.largeImageText,
+      small_image: activity.smallImageKey,
+      small_text: activity.smallImageText,
+    };
+  }
+
+  if (activity.buttons?.length) {
+    rpcActivity.buttons = activity.buttons;
+  }
+
+  return rpcActivity;
+}
+
+async function setDiscordActivity(activity) {
+  const { force: _force, ...clientActivity } = activity || {};
+  if (discordRawActivitySupported && typeof discordClient?.request === "function") {
+    try {
+      await discordClient.request("SET_ACTIVITY", {
+        pid: getDiscordPid(),
+        activity: toDiscordRpcActivity(clientActivity),
+      });
+      return;
+    } catch (err) {
+      discordRawActivitySupported = false;
+      if (err?.code && err.code !== 4002 && err.code !== 4000) {
+        throw err;
+      }
+    }
+  }
+
+  await discordClient.setActivity(clientActivity);
+}
+
+async function markDiscordDisconnected(sessionId, client, message = "Disconnected") {
+  if (sessionId !== discordSessionId || client !== discordClient) return;
+  discordStatusMessage = message;
+  await destroyDiscordClient();
+  emitDiscordPresenceStatus();
+}
+
+async function applyDiscordActivity() {
+  if (!discordClient || !discordReady || !discordActivity) return;
+  const elapsed = Date.now() - discordLastActivitySetAt;
+  if (!discordActivity.force && discordLastActivitySetAt && elapsed < DISCORD_ACTIVITY_MIN_INTERVAL_MS) {
+    clearDiscordActivityApplyTimer();
+    discordActivityApplyTimer = setTimeout(() => {
+      discordActivityApplyTimer = null;
+      applyDiscordActivity().catch((err) => {
+        discordStatusMessage = err.message || "Presence failed";
+        emitDiscordPresenceStatus();
+      });
+    }, DISCORD_ACTIVITY_MIN_INTERVAL_MS - elapsed);
+    return;
+  }
+
+  clearDiscordActivityApplyTimer();
+  await setDiscordActivity(discordActivity);
+  discordLastActivitySetAt = Date.now();
+}
+
+async function ensureDiscordConnected() {
+  if (!discordEnabled) {
+    discordStatusMessage = "Off";
+    emitDiscordPresenceStatus();
+    return { success: false, ...getDiscordPresenceStatus() };
+  }
+
+  if (!isValidDiscordClientId(discordClientId)) {
+    discordStatusMessage = "Client ID needed";
+    emitDiscordPresenceStatus();
+    return { success: false, ...getDiscordPresenceStatus() };
+  }
+
+  if (discordClient && discordReady) {
+    return { success: true, ...getDiscordPresenceStatus() };
+  }
+
+  if (discordLoginPromise) return discordLoginPromise;
+
+  if (discordClient) {
+    await destroyDiscordClient();
+  }
+
+  const sessionId = ++discordSessionId;
+  const client = new DiscordRPC.Client({ transport: "ipc" });
+  discordClient = client;
+  DiscordRPC.register(discordClientId);
+
+  client.on("ready", async () => {
+    if (sessionId !== discordSessionId || client !== discordClient) return;
+    discordReady = true;
+    discordStatusMessage = "Connected";
+    emitDiscordPresenceStatus();
+  });
+
+  client.on("disconnected", () => {
+    markDiscordDisconnected(sessionId, client).catch(() => {});
+  });
+
+  client.on("error", (err) => {
+    markDiscordDisconnected(sessionId, client, err.message || "Discord unavailable").catch(() => {});
+  });
+
+  discordLoginPromise = client
+    .login({ clientId: discordClientId })
+    .then(async () => {
+      if (sessionId !== discordSessionId || client !== discordClient) {
+        return { success: false, ...getDiscordPresenceStatus() };
+      }
+      discordReady = true;
+      discordStatusMessage = "Connected";
+      emitDiscordPresenceStatus();
+      return { success: true, ...getDiscordPresenceStatus() };
+    })
+    .catch(async (err) => {
+      if (sessionId !== discordSessionId || client !== discordClient) {
+        return { success: false, ...getDiscordPresenceStatus() };
+      }
+      discordStatusMessage = err.message || "Discord unavailable";
+      await destroyDiscordClient();
+      emitDiscordPresenceStatus();
+      return { success: false, ...getDiscordPresenceStatus() };
+    })
+    .finally(() => {
+      if (sessionId === discordSessionId) {
+        discordLoginPromise = null;
+      }
+    });
+
+  return discordLoginPromise;
+}
 
 function capturePlayerMediaRequest(details) {
   const url = details?.url || "";
@@ -293,6 +605,13 @@ function createWindow() {
     attachFullscreenShortcut(guestContents, { syncVideoFullscreenKeys: true });
     attachHtmlFullscreenBridge(guestContents);
     guestContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    guestContents.on("console-message", (_event, _level, message) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (typeof message !== "string" || !message.startsWith(PLAYER_STATE_PREFIX)) return;
+      try {
+        mainWindow.webContents.send("player-playback-state", JSON.parse(message.slice(PLAYER_STATE_PREFIX.length)));
+      } catch {}
+    });
 
     guestContents.on("will-navigate", (details) => {
       if (!isAllowedPlayerUrl(details.url)) {
@@ -303,6 +622,7 @@ function createWindow() {
     guestContents.on("dom-ready", () => {
       guestContents.insertCSS(PLAYER_WATERMARK_CSS).catch(() => {});
       guestContents.executeJavaScript(PLAYER_WATERMARK_SCRIPT).catch(() => {});
+      guestContents.executeJavaScript(PLAYER_STATE_SCRIPT).catch(() => {});
     });
   });
 }
@@ -322,8 +642,71 @@ ipcMain.on("window-toggle-fullscreen", () => {
   if (!mainWindow) return;
   setMainWindowFullscreen(!mainWindow.isFullScreen());
 });
-ipcMain.on("window-close", () => mainWindow?.close());
+ipcMain.on("window-close", async () => {
+  await destroyDiscordClient();
+  mainWindow?.close();
+});
 ipcMain.handle("window-is-fullscreen", () => Boolean(mainWindow?.isFullScreen()));
+
+ipcMain.handle("discord-presence-configure", async (_event, options = {}) => {
+  const nextEnabled = Boolean(options.enabled);
+  const nextClientId = normalizeDiscordClientId(options.clientId);
+  const clientChanged = nextClientId !== discordClientId;
+
+  discordEnabled = nextEnabled;
+  discordClientId = nextClientId;
+
+  if (!discordEnabled) {
+    discordStatusMessage = "Off";
+    await destroyDiscordClient();
+    emitDiscordPresenceStatus();
+    return { success: true, ...getDiscordPresenceStatus() };
+  }
+
+  if (!isValidDiscordClientId(discordClientId)) {
+    discordStatusMessage = "Client ID needed";
+    await destroyDiscordClient();
+    emitDiscordPresenceStatus();
+    return { success: false, ...getDiscordPresenceStatus() };
+  }
+
+  if (clientChanged) {
+    await destroyDiscordClient();
+  }
+
+  return ensureDiscordConnected();
+});
+
+ipcMain.handle("discord-presence-set-activity", async (_event, payload = {}) => {
+  discordActivity = buildDiscordActivity(payload);
+  const connection = await ensureDiscordConnected();
+  if (!connection.success) return connection;
+
+  try {
+    await applyDiscordActivity();
+    discordStatusMessage = "Connected";
+    emitDiscordPresenceStatus();
+    return { success: true, ...getDiscordPresenceStatus() };
+  } catch (err) {
+    discordStatusMessage = err.message || "Presence failed";
+    emitDiscordPresenceStatus();
+    return { success: false, ...getDiscordPresenceStatus() };
+  }
+});
+
+ipcMain.handle("discord-presence-clear", async () => {
+  discordActivity = null;
+  clearDiscordActivityApplyTimer();
+  discordLastActivitySetAt = 0;
+  if (discordClient && discordReady) {
+    try {
+      await withDiscordTimeout(discordClient.clearActivity());
+    } catch {}
+  }
+  return { success: true, ...getDiscordPresenceStatus() };
+});
+
+ipcMain.handle("discord-presence-status", () => getDiscordPresenceStatus());
 
 // ── Top 10 cache reader ────────────────────────────────────────────────────
 const TOP10_CACHE_PATH = path.join(__dirname, "top10_cache.json");
@@ -1491,6 +1874,7 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
 
     let stdoutBuffer = "";
     let stderrBuffer = "";
+    let stderrTail = "";
     let parserState = {
       totalFragments: 0,
       completedFragments: 0,
@@ -1519,6 +1903,7 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
 
       const update = parseExternalDownloaderLine(trimmed, parserState);
       if (source === "stderr") {
+        stderrTail = `${stderrTail}\n${trimmed}`.slice(-12000);
         warnDownload("external", "External downloader stderr.", { downloadId, line: trimmed });
       } else if (shouldLogExternalStdoutLine(trimmed, update)) {
         logDownload("external", "External downloader stdout.", { downloadId, line: trimmed });
@@ -1537,9 +1922,10 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
     });
 
     proc.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderrBuffer += text;
-      text.split(/\r?\n|\r/).forEach((line) => consumeLine(line, "stderr"));
+      stderrBuffer += chunk.toString();
+      const parts = stderrBuffer.split(/\r?\n|\r/);
+      stderrBuffer = parts.pop() || "";
+      parts.forEach((line) => consumeLine(line, "stderr"));
     });
 
     proc.on("error", (err) => {
@@ -1560,6 +1946,10 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
       if (stdoutBuffer.trim()) {
         consumeLine(stdoutBuffer.trim(), "stdout");
         stdoutBuffer = "";
+      }
+      if (stderrBuffer.trim()) {
+        consumeLine(stderrBuffer.trim(), "stderr");
+        stderrBuffer = "";
       }
 
       if (job.cancelled || signal) {
@@ -1609,7 +1999,7 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
       }
 
       const errorLine =
-        String(stderrBuffer || "")
+        String(stderrTail || "")
           .split(/\r?\n/)
           .map((line) => line.trim())
           .filter(Boolean)
@@ -1702,6 +2092,7 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
     let settled = false;
     let stdoutBuffer = "";
     let stderrBuffer = "";
+    let stderrTail = "";
 
     const flushStdoutLine = (line) => {
       const trimmed = line.trim();
@@ -1745,9 +2136,11 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
     });
 
     proc.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderrBuffer += text;
-      text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
+      stderrBuffer += chunk.toString();
+      const lines = stderrBuffer.split(/\r?\n/);
+      stderrBuffer = lines.pop() || "";
+      lines.map((line) => line.trim()).filter(Boolean).forEach((line) => {
+        stderrTail = `${stderrTail}\n${line}`.slice(-12000);
         warnDownload("ytdlp", "yt-dlp stderr.", { downloadId, line });
       });
     });
@@ -1764,6 +2157,12 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
       settled = true;
       if (stdoutBuffer.trim()) flushStdoutLine(stdoutBuffer.trim());
       stdoutBuffer = "";
+      if (stderrBuffer.trim()) {
+        const line = stderrBuffer.trim();
+        stderrTail = `${stderrTail}\n${line}`.slice(-12000);
+        warnDownload("ytdlp", "yt-dlp stderr.", { downloadId, line });
+      }
+      stderrBuffer = "";
 
       const cancelled = job.cancelled || signal === "SIGTERM" || signal === "SIGKILL";
       job.currentProc = null;
@@ -1790,7 +2189,7 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
         return;
       }
 
-      const stderr = stderrBuffer.trim();
+      const stderr = stderrTail.trim();
       const error = stderr || `yt-dlp exited with code ${code}.`;
       errorDownload("ytdlp", "yt-dlp download failed.", { downloadId, code, error });
       event.sender.send("downloads-error", { downloadId, error });
@@ -2049,6 +2448,10 @@ app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 app.whenReady().then(createWindow);
+
+app.on("before-quit", () => {
+  destroyDiscordClient();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
