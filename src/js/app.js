@@ -541,6 +541,12 @@
     return map[normalized] || "";
   }
 
+  function getDisplayRating(item) {
+    const raw = item?.imdb_rating ?? item?.imdbRating ?? item?.vote_average;
+    const rating = Number(raw);
+    return Number.isFinite(rating) && rating > 0 ? rating.toFixed(1) : "N/A";
+  }
+
   function getTitleAgeRating(details, type) {
     const regionPriority = ["US", "PK", "GB", "IN", "CA", "AU"];
 
@@ -2207,7 +2213,7 @@
     els.heroOverview.textContent = item.overview || "";
 
     const year = (item.release_date || item.first_air_date || "").slice(0, 4);
-    let rating = item.vote_average ? item.vote_average.toFixed(1) : "N/A";
+    let rating = getDisplayRating(item);
     const type = item.media_type === "tv" ? "TV Series" : item.media_type === "manga" ? "Manga" : "Movie";
 
     els.heroMeta.innerHTML = `
@@ -2226,7 +2232,7 @@
     }
 
     // Fetch details asynchronously to get IMDb rating for hero banner
-    if (apiType !== "manga") tmdb[apiType === "tv" ? "tvDetails" : "movieDetails"](item.id).then(async (details) => {
+    if (apiType !== "manga" && !item.imdb_rating) tmdb[apiType === "tv" ? "tvDetails" : "movieDetails"](item.id).then(async (details) => {
       if (requestId !== heroVisualRequestId || heroItem?.id !== item.id) return;
       const imdbId = details.external_ids?.imdb_id;
       if (imdbId) {
@@ -2574,9 +2580,9 @@
       els.modalOverview.textContent = details.overview || "";
 
       const year = (details.release_date || details.first_air_date || "").slice(0, 4);
-      let rating = details.vote_average ? details.vote_average.toFixed(1) : "N/A";
+      let rating = getDisplayRating({ ...details, imdb_rating: item.imdb_rating });
       const imdbId = details.external_ids?.imdb_id;
-      if (imdbId) {
+      if (!item.imdb_rating && imdbId) {
         const imdbRating = await tmdb.getImdbRating(imdbId, type);
         if (imdbRating) rating = imdbRating;
       }

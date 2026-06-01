@@ -9,6 +9,33 @@ const VIDSRC_BASE = "https://vidsrc-embed.ru/embed";
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 const MANGADEX_BASE = "https://api.mangadex.org";
 const MANGADEX_UPLOADS = "https://uploads.mangadex.org";
+const IMDB_TOP_MOVIES_MARKDOWN = "https://r.jina.ai/http://r.jina.ai/http://https://www.imdb.com/chart/top/";
+const IMDB_TOP_TV_CSV = "https://imdb-show-explorer.vercel.app/data/imdb_top_tv_shows.csv";
+const IMDB_CHART_CACHE_MS = 24 * 60 * 60 * 1000;
+const IMDB_TOP_MOVIES_SNAPSHOT = [
+  { rank: 1, title: "The Shawshank Redemption", year: 1994, rating: 9.3, votes: "3.2M" },
+  { rank: 2, title: "The Godfather", year: 1972, rating: 9.2, votes: "2.2M" },
+  { rank: 3, title: "The Dark Knight", year: 2008, rating: 9.1, votes: "3.2M" },
+  { rank: 4, title: "The Godfather Part II", year: 1974, rating: 9.0, votes: "1.5M" },
+  { rank: 5, title: "12 Angry Men", year: 1957, rating: 9.0, votes: "985K" },
+  { rank: 6, title: "The Lord of the Rings: The Return of the King", year: 2003, rating: 9.0, votes: "2.2M" },
+  { rank: 7, title: "Schindler's List", year: 1993, rating: 9.0, votes: "1.6M" },
+  { rank: 8, title: "The Lord of the Rings: The Fellowship of the Ring", year: 2001, rating: 8.9, votes: "2.2M" },
+  { rank: 9, title: "Pulp Fiction", year: 1994, rating: 8.8, votes: "2.4M" },
+  { rank: 10, title: "The Good, the Bad and the Ugly", year: 1966, rating: 8.8, votes: "892K" },
+  { rank: 11, title: "The Lord of the Rings: The Two Towers", year: 2002, rating: 8.8, votes: "2M" },
+  { rank: 12, title: "Forrest Gump", year: 1994, rating: 8.8, votes: "2.5M" },
+  { rank: 13, title: "Fight Club", year: 1999, rating: 8.8, votes: "2.6M" },
+  { rank: 14, title: "Inception", year: 2010, rating: 8.8, votes: "2.8M" },
+  { rank: 15, title: "Star Wars: Episode V - The Empire Strikes Back", year: 1980, rating: 8.7, votes: "1.5M" },
+  { rank: 16, title: "The Matrix", year: 1999, rating: 8.7, votes: "2.2M" },
+  { rank: 17, title: "GoodFellas", year: 1990, rating: 8.7, votes: "1.4M" },
+  { rank: 18, title: "Interstellar", year: 2014, rating: 8.7, votes: "2.5M" },
+  { rank: 19, title: "One Flew Over the Cuckoo's Nest", year: 1975, rating: 8.6, votes: "1.2M" },
+  { rank: 20, title: "Se7en", year: 1995, rating: 8.6, votes: "2M" },
+];
+const imdbChartMemoryCache = new Map();
+const imdbRatingMemoryCache = new Map();
 
 const tmdb = {
   // ── Fetch helper with retry ──
@@ -47,6 +74,14 @@ const tmdb = {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`External API Error: ${res.status} ${res.statusText}`);
     return res.json();
+  },
+
+  async fetchExternalText(url, timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    if (!res.ok) throw new Error(`External API Error: ${res.status} ${res.statusText}`);
+    return res.text();
   },
 
   async fetchGraphQL(url, query, variables = {}) {
@@ -362,12 +397,260 @@ const tmdb = {
     return this.fetch(`/list/${id}`, { page });
   },
 
-  imdbTopMovies(page = 1) {
-    return this.list(634, page);
+  normalizeChartTitle(value = "") {
+    return String(value)
+      .toLowerCase()
+      .replace(/&/g, "and")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
   },
 
-  imdbTopTV(page = 1) {
-    return this.list(142134, page);
+  chartTitleKeys(value = "") {
+    const key = this.normalizeChartTitle(value);
+    const aliases = {
+      seven: "se7en",
+    };
+    return new Set([key, aliases[key]].filter(Boolean));
+  },
+
+  parseImdbTopMoviesMarkdown(markdown = "") {
+    const lines = String(markdown)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const items = [];
+
+    for (let index = 0; index < lines.length; index++) {
+      const rankMatch = lines[index].match(/^#(\d+)$/);
+      if (!rankMatch) continue;
+
+      const title = lines[index + 1] || "";
+      const meta = lines[index + 2] || "";
+      const rating = Number(lines[index + 3]);
+      const yearMatch = meta.match(/^(\d{4})/);
+      if (!title || !yearMatch || !Number.isFinite(rating)) continue;
+
+      items.push({
+        rank: Number(rankMatch[1]),
+        title,
+        year: Number(yearMatch[1]),
+        rating,
+        votes: (lines[index + 4] || "").replace(/[()]/g, "").trim(),
+      });
+    }
+
+    return items;
+  },
+
+  parseCsvRows(csv = "") {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let quoted = false;
+
+    for (let index = 0; index < csv.length; index++) {
+      const char = csv[index];
+      const next = csv[index + 1];
+      if (char === '"') {
+        if (quoted && next === '"') {
+          field += '"';
+          index++;
+        } else {
+          quoted = !quoted;
+        }
+        continue;
+      }
+      if (char === "," && !quoted) {
+        row.push(field);
+        field = "";
+        continue;
+      }
+      if ((char === "\n" || char === "\r") && !quoted) {
+        if (char === "\r" && next === "\n") index++;
+        row.push(field);
+        if (row.some((value) => value !== "")) rows.push(row);
+        row = [];
+        field = "";
+        continue;
+      }
+      field += char;
+    }
+
+    if (field || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+
+    const headers = rows.shift() || [];
+    return rows.map((values) =>
+      headers.reduce((entry, header, index) => {
+        entry[header] = values[index] || "";
+        return entry;
+      }, {})
+    );
+  },
+
+  parseImdbTopTVCsv(csv = "") {
+    return this.parseCsvRows(csv)
+      .map((row) => {
+        const imdbId = String(row.seriesLink || "").match(/\/title\/(tt\d+)/)?.[1] || "";
+        return {
+          rank: Number(row.seriesRank),
+          title: row.seriesTitle,
+          year: Number(String(row.timeRange || "").match(/\d{4}/)?.[0]) || null,
+          rating: Number(row.overallRating),
+          votes: row.numberOfRatings,
+          imdb_id: imdbId,
+        };
+      })
+      .filter((entry) => entry.rank && entry.title && Number.isFinite(entry.rating));
+  },
+
+  readCachedImdbChart(type) {
+    const memory = imdbChartMemoryCache.get(type);
+    if (memory?.items?.length && Date.now() - memory.cachedAt < IMDB_CHART_CACHE_MS) return memory.items;
+
+    try {
+      const raw = localStorage.getItem(`velvet_imdb_top_${type}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.items?.length || Date.now() - parsed.cachedAt >= IMDB_CHART_CACHE_MS) return null;
+      imdbChartMemoryCache.set(type, parsed);
+      return parsed.items;
+    } catch {
+      return null;
+    }
+  },
+
+  writeCachedImdbChart(type, items) {
+    const payload = { cachedAt: Date.now(), items };
+    imdbChartMemoryCache.set(type, payload);
+    try {
+      localStorage.setItem(`velvet_imdb_top_${type}`, JSON.stringify(payload));
+    } catch {}
+  },
+
+  async loadRawImdbMovieChart() {
+    try {
+      const markdown = await this.fetchExternalText(IMDB_TOP_MOVIES_MARKDOWN, 2500);
+      const chart = this.parseImdbTopMoviesMarkdown(markdown);
+      if (chart.length) return chart;
+    } catch {}
+    return IMDB_TOP_MOVIES_SNAPSHOT;
+  },
+
+  async loadRawImdbTVChart() {
+    const csv = await this.fetchExternalText(IMDB_TOP_TV_CSV);
+    const chart = this.parseImdbTopTVCsv(csv);
+    if (!chart.length) throw new Error("IMDb TV chart returned no titles.");
+    chart.forEach((entry) => {
+      if (entry.imdb_id && Number.isFinite(entry.rating)) {
+        imdbRatingMemoryCache.set(entry.imdb_id, entry.rating.toFixed(1));
+      }
+    });
+    return chart;
+  },
+
+  pickBestTmdbMatch(results = [], entry = {}, type = "movie") {
+    const titleKeys = this.chartTitleKeys(entry.title);
+    const exact = results.find((item) => {
+      const itemTitle = this.normalizeChartTitle(item.title || item.name);
+      const itemYear = Number(String(item.release_date || item.first_air_date || "").slice(0, 4));
+      return titleKeys.has(itemTitle) && (!entry.year || itemYear === entry.year);
+    });
+    if (exact) return exact;
+
+    const sameYear = results.find((item) => {
+      const itemYear = Number(String(item.release_date || item.first_air_date || "").slice(0, 4));
+      return item.poster_path && entry.year && itemYear === entry.year;
+    });
+    if (sameYear) return sameYear;
+
+    return results.find((item) => item.poster_path) || results[0] || null;
+  },
+
+  async hydrateImdbChartEntry(entry, type = "movie") {
+    let match = null;
+
+    if (entry.imdb_id) {
+      const found = await this.findByImdbId(entry.imdb_id).catch(() => null);
+      const results = type === "tv" ? found?.tv_results : found?.movie_results;
+      match = results?.find((item) => item.poster_path) || results?.[0] || null;
+    }
+
+    if (!match) {
+      const search =
+        type === "tv"
+          ? await this.searchTV(entry.title, 1, entry.year ? { first_air_date_year: entry.year } : {})
+          : await this.searchMovies(entry.title, 1, entry.year ? { year: entry.year } : {});
+      match = this.pickBestTmdbMatch(search.results || [], entry, type);
+    }
+
+    if (!match?.poster_path) return null;
+
+    return {
+      ...match,
+      media_type: type,
+      imdb_rank: entry.rank,
+      imdb_rating: Number.isFinite(entry.rating) ? entry.rating.toFixed(1) : null,
+      imdb_votes: entry.votes || "",
+      imdb_id: entry.imdb_id || "",
+      vote_average: Number.isFinite(entry.rating) ? entry.rating : match.vote_average,
+      rank: entry.rank,
+    };
+  },
+
+  async hydrateImdbChart(chart, type = "movie", limit = 20) {
+    const items = [];
+    const seen = new Set();
+    const slice = chart.slice(0, Math.max(limit, 1));
+
+    const batchSize = 8;
+    for (let index = 0; index < slice.length && items.length < limit; index += batchSize) {
+      const batch = slice.slice(index, index + batchSize);
+      const hydrated = await Promise.all(batch.map((entry) => this.hydrateImdbChartEntry(entry, type).catch(() => null)));
+      for (const item of hydrated) {
+        if (!item) continue;
+        const key = `${item.media_type}-${item.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push(item);
+      }
+    }
+
+    return items.sort((a, b) => (a.imdb_rank || 999) - (b.imdb_rank || 999));
+  },
+
+  async imdbTopMovies(page = 1) {
+    const limit = 20;
+    const cached = page === 1 ? this.readCachedImdbChart("movies") : null;
+    if (cached?.length) return { items: cached, source: "imdb" };
+
+    try {
+      const chart = await this.loadRawImdbMovieChart();
+      const items = await this.hydrateImdbChart(chart, "movie", limit);
+      if (page === 1) this.writeCachedImdbChart("movies", items);
+      return { items, source: "imdb" };
+    } catch (err) {
+      const fallback = await this.list(634, page).catch(() => ({ items: [] }));
+      return { ...fallback, source: "tmdb-list-fallback", error: err.message };
+    }
+  },
+
+  async imdbTopTV(page = 1) {
+    const limit = 20;
+    const cached = page === 1 ? this.readCachedImdbChart("tv") : null;
+    if (cached?.length) return { items: cached, source: "imdb" };
+
+    try {
+      const chart = await this.loadRawImdbTVChart();
+      const items = await this.hydrateImdbChart(chart, "tv", limit);
+      if (page === 1) this.writeCachedImdbChart("tv", items);
+      return { items, source: "imdb" };
+    } catch (err) {
+      const fallback = await this.list(142134, page).catch(() => ({ items: [] }));
+      return { ...fallback, source: "tmdb-list-fallback", error: err.message };
+    }
   },
 
   // ── Movies ──
@@ -462,11 +745,14 @@ const tmdb = {
   searchMulti(query, page = 1) {
     return this.fetch("/search/multi", { query, page });
   },
-  searchMovies(query, page = 1) {
-    return this.fetch("/search/movie", { query, page });
+  searchMovies(query, page = 1, params = {}) {
+    return this.fetch("/search/movie", { query, page, ...params });
   },
-  searchTV(query, page = 1) {
-    return this.fetch("/search/tv", { query, page });
+  searchTV(query, page = 1, params = {}) {
+    return this.fetch("/search/tv", { query, page, ...params });
+  },
+  findByImdbId(imdbId) {
+    return this.fetch(`/find/${imdbId}`, { external_source: "imdb_id" });
   },
   async searchManga(query, limit = 12) {
     const response = await this.mangadexFetch("/manga", {
@@ -649,11 +935,14 @@ const tmdb = {
   // ── IMDb Rating via Cinemeta ──
   async getImdbRating(imdbId, type = "movie") {
     if (!imdbId) return null;
+    if (imdbRatingMemoryCache.has(imdbId)) return imdbRatingMemoryCache.get(imdbId);
     try {
       const res = await fetch(`https://v3-cinemeta.strem.io/meta/${type === "tv" ? "series" : "movie"}/${imdbId}.json`);
       if (!res.ok) return null;
       const data = await res.json();
-      return data?.meta?.imdbRating || null;
+      const rating = data?.meta?.imdbRating || null;
+      if (rating) imdbRatingMemoryCache.set(imdbId, rating);
+      return rating;
     } catch (err) {
       return null;
     }
