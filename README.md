@@ -1,9 +1,9 @@
-# Cinemax
+# Velvet
 
 A Netflix-inspired media browser built with Electron.
 
 ## Overview
-Cinemax is a desktop application that provides a rich media browsing experience.
+Velvet is a desktop application that provides a rich media browsing experience.
 
 ## Installation
 
