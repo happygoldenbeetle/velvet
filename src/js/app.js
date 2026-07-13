@@ -436,6 +436,11 @@
     els.mainContent.style.display = "";
     prepareHeroTransition();
 
+    // Hero-less pages must not use the negative top margin that tucks content
+    // under the hero, or their heading is clipped above the top of the app.
+    const hasHero = !["mylist", "downloads"].includes(page);
+    els.contentRows.classList.toggle("no-hero", !hasHero);
+
     // Page transition
     els.contentRows.style.opacity = "0";
     els.contentRows.style.transform = "translateY(16px)";
