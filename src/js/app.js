@@ -23,6 +23,7 @@
   const continueStore = new Map();
   const heroLogoCache = new Map();
   let downloadsManifest = [];
+  let downloadsLoaded = false;
   let downloadsListenersAttached = false;
   let currentDownloadContext = null;
   let localDiscordContext = null;
@@ -1104,6 +1105,9 @@
   }
 
   function persistDownloadsManifest() {
+    // Never write before the on-disk manifest has been loaded, or an early save
+    // would overwrite the user's saved downloads with an empty list.
+    if (!downloadsLoaded) return;
     window.electronAPI?.saveDownloads?.(downloadsManifest).catch((err) => {
       console.warn("Could not save downloads manifest:", err);
     });
@@ -1113,6 +1117,21 @@
     if (!window.electronAPI?.loadDownloads) return;
     try {
       downloadsManifest = (await window.electronAPI.loadDownloads()) || [];
+      downloadsLoaded = true;
+
+      // Downloads still marked in-progress were interrupted by an app restart —
+      // no process is running for them. Surface them as retryable instead of a
+      // permanently stuck "Downloading…".
+      let changed = false;
+      downloadsManifest.forEach((entry) => {
+        if (entry.status === "downloading" || entry.status === "assembling") {
+          entry.status = "error";
+          entry.error = "Download was interrupted. Click retry to resume.";
+          entry.message = "Interrupted — click retry";
+          changed = true;
+        }
+      });
+      if (changed) persistDownloadsManifest();
     } catch (err) {
       console.warn("Could not load downloads manifest:", err);
       downloadsManifest = [];
@@ -1193,6 +1212,19 @@
       const entry = downloadsManifest.find((download) => download.id === payload.downloadId);
       if (!entry) return;
       const nextProgress = payload.progress ?? payload.percent ?? entry.progress ?? 0;
+      // yt-dlp progress events carry no message, so derive one from the phase/percent
+      // instead of leaving the initial "Starting…" label stuck while the bar fills.
+      let message = payload.message;
+      if (!message) {
+        if (payload.phase === "assembling") {
+          message = "Merging…";
+        } else if (nextProgress > 0) {
+          const speed = payload.speed || entry.speed || "";
+          message = `Downloading ${Math.round(nextProgress)}%${speed ? ` · ${speed}` : ""}`;
+        } else {
+          message = entry.message || "Starting…";
+        }
+      }
       Object.assign(entry, {
         status: payload.phase === "assembling" ? "assembling" : "downloading",
         progress: nextProgress,
@@ -1200,7 +1232,7 @@
         size: payload.size ?? entry.size ?? "",
         totalFragments: payload.totalFragments ?? entry.totalFragments ?? 0,
         completedFragments: payload.completedFragments ?? entry.completedFragments ?? 0,
-        message: payload.message ?? entry.message ?? "",
+        message,
         outputPath: payload.outputPath || entry.outputPath || "",
         progressUpdatedAt: Date.now(),
       });

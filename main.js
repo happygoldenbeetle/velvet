@@ -1910,14 +1910,21 @@ function parseYtDlpProgressLine(line) {
   const eta = parts[3] || "";
   const speed = parts[4] || "";
   const status = parts[5] || "";
+  const fragmentIndex = Number.parseInt(parts[6], 10);
+  const fragmentCount = Number.parseInt(parts[7], 10);
   const resolvedTotal = Number.isFinite(totalBytes) && totalBytes > 0
     ? totalBytes
     : Number.isFinite(totalEstimate) && totalEstimate > 0
       ? totalEstimate
       : null;
-  const percent = resolvedTotal && Number.isFinite(downloadedBytes)
+  let percent = resolvedTotal && Number.isFinite(downloadedBytes)
     ? Math.max(0, Math.min(100, (downloadedBytes / resolvedTotal) * 100))
     : null;
+  // HLS downloads usually report no total byte size, so fall back to fragment
+  // progress — otherwise the bar sits at 0% ("Starting…") until the very end.
+  if (percent == null && Number.isFinite(fragmentCount) && fragmentCount > 0 && Number.isFinite(fragmentIndex)) {
+    percent = Math.max(0, Math.min(100, (fragmentIndex / fragmentCount) * 100));
+  }
 
   const speedBytes = Number.parseFloat(speed);
   return {
@@ -1926,6 +1933,8 @@ function parseYtDlpProgressLine(line) {
     eta,
     speed: Number.isFinite(speedBytes) && speedBytes > 0 ? `${formatByteSize(speedBytes)}/s` : "",
     size: resolvedTotal ? formatByteSize(resolvedTotal) : "",
+    completedFragments: Number.isFinite(fragmentIndex) ? fragmentIndex : null,
+    totalFragments: Number.isFinite(fragmentCount) ? fragmentCount : null,
     status,
     percent,
   };
@@ -2190,12 +2199,13 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
 
     const args = [
       "--ignore-config",
+      "--no-update",
       "--newline",
       "--continue",
       "--no-overwrites",
       "--no-playlist",
       "--ffmpeg-location", ffmpegPath,
-      "--progress-template", "download:DL:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.eta)s|%(progress.speed)s|%(progress.status)s",
+      "--progress-template", "download:DL:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.eta)s|%(progress.speed)s|%(progress.status)s|%(progress.fragment_index)s|%(progress.fragment_count)s",
       "--progress-template", "postprocess:PP:%(progress.status)s|%(progress.postprocessor)s",
       "--add-headers", `Referer:${refererUrl}`,
     ];
