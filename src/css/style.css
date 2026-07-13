@@ -2375,7 +2375,7 @@ body.hero-top-fade-off .hero-gradient {
 .mylist-heading {
   font-size: 30px;
   font-weight: 800;
-  margin-bottom: 8px;
+  margin-bottom: 14px;
   display: flex;
   align-items: baseline;
   gap: 14px;
@@ -2391,9 +2391,7 @@ body.hero-top-fade-off .hero-gradient {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
-  margin-top: 20px;
-  padding: 16px 0;
-  margin-bottom: -16px;
+  margin-top: 0;
 }
 
 .mylist-grid .card {
