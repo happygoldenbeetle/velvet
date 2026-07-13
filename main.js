@@ -198,6 +198,10 @@ const PLAYER_STATE_SCRIPT = `
 
 let mainWindow;
 const playerWebContentsIds = new Set();
+// Active stream resolvers keyed by their hidden window's webContents id.
+// Populated during download-resolve-stream so the session-level webRequest hook
+// (which, unlike CDP, sees out-of-process iframe requests) can surface the media URL.
+const streamResolverWaiters = new Map();
 let discordClient = null;
 let discordClientId = "";
 let discordEnabled = false;
@@ -486,6 +490,56 @@ function capturePlayerMediaRequest(details) {
   }
 }
 
+// Session-level detection for the hidden stream-resolver window. Catches the
+// .m3u8/.mp4 request even when it originates inside a cross-origin (out-of-process)
+// iframe, which the resolver's top-frame CDP debugger cannot observe.
+// Resolve which active resolver (by its registered webContents id) a session
+// request belongs to. Exact match on webContentsId, with a fallback for
+// out-of-process iframes attributed to their own id when a single resolve is active.
+function matchResolverWcId(details) {
+  if (streamResolverWaiters.size === 0) return null;
+  if (streamResolverWaiters.has(details?.webContentsId)) return details.webContentsId;
+  if (
+    streamResolverWaiters.size === 1 &&
+    details?.webContentsId !== mainWindow?.webContents?.id &&
+    !playerWebContentsIds.has(details?.webContentsId)
+  ) {
+    return streamResolverWaiters.keys().next().value;
+  }
+  return null;
+}
+
+// Runs in onBeforeSendHeaders so the finalized request headers (Referer/Origin/
+// User-Agent) are available alongside the URL. Detection must live here, not in
+// onBeforeRequest, so the media URL and the headers the CDN requires are captured
+// together — the segment CDN 403s requests that lack the player's Referer.
+function captureResolverMediaRequest(details) {
+  if (streamResolverWaiters.size === 0) return;
+
+  const lowerUrl = (details?.url || "").toLowerCase();
+  const isHls = lowerUrl.includes(".m3u8");
+  const isMp4 =
+    lowerUrl.includes(".mp4") &&
+    !lowerUrl.includes("thumb") &&
+    !lowerUrl.includes("poster") &&
+    !lowerUrl.includes("preview");
+  if (!isHls && !isMp4) return;
+
+  const wcId = matchResolverWcId(details);
+  if (wcId == null) return;
+  const waiter = streamResolverWaiters.get(wcId);
+  if (!waiter) return;
+
+  const reqHeaders = details.requestHeaders || {};
+  const pick = (name) => {
+    const key = Object.keys(reqHeaders).find((h) => h.toLowerCase() === name);
+    return key ? reqHeaders[key] : "";
+  };
+  const headers = { referer: pick("referer"), origin: pick("origin"), userAgent: pick("user-agent") };
+
+  waiter(details.url, isHls ? "hls" : "mp4", headers);
+}
+
 function attachFullscreenShortcut(webContents, options = {}) {
   webContents.on("before-input-event", (event, input) => {
     if (!mainWindow) return;
@@ -588,6 +642,15 @@ function createWindow() {
       } catch {}
     }
     callback({ cancel: blocked });
+  });
+
+  // Detect the resolver's media request here (not in onBeforeRequest) so the
+  // finalized Referer/Origin/User-Agent headers are captured with the URL.
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    try {
+      captureResolverMediaRequest(details);
+    } catch {}
+    callback({ requestHeaders: details.requestHeaders });
   });
 
   // Block new window popups (ad popups)
@@ -1184,15 +1247,18 @@ ipcMain.handle("download-resolve-stream", async (_event, embedUrl) => {
     // A fresh partition has no cookies/fingerprint and gets bot-detected by vidsrc.
     const ses = session.defaultSession;
 
-    // Show off-screen (not show:false) — avoids headless detection by vidsrc
+    // On-screen but invisible (opacity 0, non-focusable, click-through). Positioning
+    // off-screen marks the window occluded/hidden, so players that gate autoplay on
+    // document.visibilityState never start and no .m3u8 is ever requested.
     const hidden = new BrowserWindow({
-      x: -9999,
-      y: -9999,
+      x: 0,
+      y: 0,
       width: 1280,
       height: 720,
-      show: true,
+      show: false,
       frame: false,
       skipTaskbar: true,
+      opacity: 0,
       webPreferences: {
         session: ses,
         contextIsolation: true,
@@ -1200,9 +1266,13 @@ ipcMain.handle("download-resolve-stream", async (_event, embedUrl) => {
         webviewTag: false,
         webSecurity: false,
         allowRunningInsecureContent: true,
+        backgroundThrottling: false,
         javascript: true,
       },
     });
+    hidden.setIgnoreMouseEvents(true);
+    hidden.showInactive();
+    try { hidden.setOpacity(0); } catch {}
 
     let resolved = false;
     let mp4Candidate = null;
@@ -1214,28 +1284,40 @@ ipcMain.handle("download-resolve-stream", async (_event, embedUrl) => {
     let lastObservedUrl = "";
     let clickInterval = null;
 
-    function resolveWith(url) {
+    const resolverWcId = hidden.webContents.id;
+
+    function resolveWith(url, headers = null) {
       if (resolved) return;
       resolved = true;
+      streamResolverWaiters.delete(resolverWcId);
       clearTimeout(timer);
       clearInterval(clickInterval);
       logDownload("resolve", "Resolved playable stream URL.", {
         streamType: url.includes(".m3u8") ? "hls" : "mp4",
         url,
+        referer: headers?.referer || "",
       });
       setTimeout(() => { try { hidden.destroy(); } catch {} }, 500);
-      resolve({ streamUrl: url, streamType: url.includes(".m3u8") ? "hls" : "mp4" });
+      resolve({ streamUrl: url, streamType: url.includes(".m3u8") ? "hls" : "mp4", headers });
     }
 
     function rejectWith(err) {
       if (resolved) return;
       resolved = true;
+      streamResolverWaiters.delete(resolverWcId);
       clearTimeout(timer);
       clearInterval(clickInterval);
       errorDownload("resolve", err.message);
       setTimeout(() => { try { hidden.destroy(); } catch {} }, 500);
       reject(err);
     }
+
+    // Detect the media request at the session level (which, unlike CDP, sees
+    // cross-origin iframe requests) and carry its headers through.
+    streamResolverWaiters.set(resolverWcId, (url, _type, headers) => {
+      logDownload("resolve", "Detected stream via session request hook.", { url });
+      resolveWith(url, headers);
+    });
 
     // ── CDP: attach debugger and enable Network domain ────────────────────
     // CDP intercepts at engine level — invisible to websites, captures all frames
@@ -1255,8 +1337,13 @@ ipcMain.handle("download-resolve-stream", async (_event, embedUrl) => {
         }
         if (u.includes(".m3u8")) {
           sawMediaResponse = true;
-          logDownload("resolve", "Detected HLS manifest request.", { url: u });
-          resolveWith(u);
+          logDownload("resolve", "Detected HLS manifest request (CDP).", { url: u });
+          // Defer so the session-level hook (which carries the Referer/Origin the
+          // CDN requires) can resolve first. Fall back to this header-less URL only
+          // if the session hook doesn't win within the grace window.
+          if (!mp4Candidate) {
+            setTimeout(() => { if (!resolved) resolveWith(u); }, 2500);
+          }
           return;
         }
         if (
@@ -1284,9 +1371,14 @@ ipcMain.handle("download-resolve-stream", async (_event, embedUrl) => {
       }
     });
 
-    hidden.webContents.on("did-finish-load", () => {
-      finishLoad = true;
-      logDownload("resolve", "Embed page finished loading.");
+    // Trigger playback without waiting for did-finish-load, which frequently never
+    // fires on these ad-laden embed pages (a hanging tracker/ad subresource blocks
+    // the load event). Start nudging on dom-ready and via a fallback timer instead.
+    let nudgingStarted = false;
+    const startNudging = () => {
+      if (nudgingStarted || resolved) return;
+      nudgingStarted = true;
+      logDownload("resolve", "Starting playback nudge loop.");
       const clickHotspots = [
         { x: 640, y: 360 },
         { x: 640, y: 420 },
@@ -1297,6 +1389,11 @@ ipcMain.handle("download-resolve-stream", async (_event, embedUrl) => {
           try { hidden.webContents.sendInputEvent({ type: "mouseMove", x, y, movementX: 0, movementY: 0 }); } catch {}
           try { hidden.webContents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 }); } catch {}
           try { hidden.webContents.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 }); } catch {}
+          // CDP-level trusted input — routes into cross-origin (out-of-process)
+          // player iframes that ignore sendInputEvent's synthetic clicks.
+          dbg.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 }).catch(() => {});
+          dbg.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }).catch(() => {});
+          dbg.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 1, clickCount: 1 }).catch(() => {});
         });
         try { hidden.webContents.sendInputEvent({ type: "keyDown", keyCode: "Space" }); } catch {}
         try { hidden.webContents.sendInputEvent({ type: "keyUp", keyCode: "Space" }); } catch {}
@@ -1342,7 +1439,17 @@ ipcMain.handle("download-resolve-stream", async (_event, embedUrl) => {
         }).catch(() => {});
       }, 2500);
       nudgePlayer();
+    };
+
+    hidden.webContents.on("dom-ready", startNudging);
+    hidden.webContents.on("did-finish-load", () => {
+      finishLoad = true;
+      logDownload("resolve", "Embed page finished loading.");
+      startNudging();
     });
+    // Fallback: some embed pages never emit dom-ready/did-finish-load for the top
+    // frame quickly; begin nudging anyway once subresources are flowing.
+    setTimeout(startNudging, 6000);
 
     hidden.webContents.on("did-fail-load", (_event2, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (!isMainFrame) return;
@@ -1812,14 +1919,25 @@ function parseYtDlpProgressLine(line) {
     ? Math.max(0, Math.min(100, (downloadedBytes / resolvedTotal) * 100))
     : null;
 
+  const speedBytes = Number.parseFloat(speed);
   return {
     downloadedBytes: Number.isFinite(downloadedBytes) ? downloadedBytes : null,
     totalBytes: resolvedTotal,
     eta,
-    speed,
+    speed: Number.isFinite(speedBytes) && speedBytes > 0 ? `${formatByteSize(speedBytes)}/s` : "",
+    size: resolvedTotal ? formatByteSize(resolvedTotal) : "",
     status,
     percent,
   };
+}
+
+function formatByteSize(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 1024) return `${Math.round(value)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GiB`;
 }
 
 ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourceUrl, outputPath, title = "" }) => {
@@ -2027,7 +2145,7 @@ ipcMain.handle("downloads-run-external", (event, { downloadId, binaryPath, sourc
   }
 });
 
-ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outputPath, referer = "", title = "" }) => {
+ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outputPath, referer = "", headers = null, title = "" }) => {
   return new Promise((resolve) => {
     const ytDlpPath = getResolvedYtDlpPath();
     const ffmpegPath = getResolvedFfmpegPath();
@@ -2049,11 +2167,26 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
     const outDir = path.dirname(outputPath);
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
-    const refererUrl = referer || "https://vidsrc-embed.ru/";
-    let originUrl = "https://vidsrc-embed.ru";
-    try {
-      originUrl = new NodeURL(refererUrl).origin;
-    } catch {}
+    // If the job was cancelled while the stream was still being resolved, stop here.
+    const preJob = activeSegmentJobs.get(downloadId);
+    if (preJob?.cancelled) {
+      warnDownload("ytdlp", "yt-dlp download cancelled before it started.", { downloadId });
+      event.sender.send("downloads-cancelled", { downloadId });
+      resolve({ success: false, cancelled: true, error: "Download was cancelled." });
+      return;
+    }
+
+    // Prefer the real headers the browser used for the .m3u8 (captured during
+    // resolve). The segment CDN 403s requests that lack the player's Referer.
+    let refererUrl = headers?.referer || referer || "";
+    if (!refererUrl) {
+      try { refererUrl = `${new NodeURL(sourceUrl).origin}/`; } catch { refererUrl = "https://vidsrc-embed.ru/"; }
+    }
+    let originUrl = headers?.origin || "";
+    if (!originUrl) {
+      try { originUrl = new NodeURL(refererUrl).origin; } catch {}
+    }
+    const userAgent = headers?.userAgent || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
     const args = [
       "--ignore-config",
@@ -2065,11 +2198,20 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
       "--progress-template", "download:DL:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.eta)s|%(progress.speed)s|%(progress.status)s",
       "--progress-template", "postprocess:PP:%(progress.status)s|%(progress.postprocessor)s",
       "--add-headers", `Referer:${refererUrl}`,
-      "--add-headers", `Origin:${originUrl}`,
-      "--add-headers", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    ];
+    if (originUrl) args.push("--add-headers", `Origin:${originUrl}`);
+    args.push(
+      "--add-headers", `User-Agent:${userAgent}`,
       "-o", outputPath,
       sourceUrl,
-    ];
+    );
+
+    logDownload("ytdlp", "Using request headers for download.", {
+      downloadId,
+      referer: refererUrl,
+      origin: originUrl,
+      fromCapture: Boolean(headers?.referer),
+    });
 
     logDownload("ytdlp", "Starting yt-dlp download.", {
       downloadId,

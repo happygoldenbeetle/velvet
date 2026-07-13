@@ -4,3 +4,14 @@ update_github.cmd
 /skill
 /md
 contenxt.md
+
+# Generated cache (regenerated on launch by fetch-top10.js)
+top10_cache.json
+
+# Scratch, debug probes, and editor/backup leftovers
+tmp_*.js
+*.broken-*
+*.bak
+*.orig
+*.tmp
+*~

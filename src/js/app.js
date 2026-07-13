@@ -1300,30 +1300,49 @@
     return localStorage.getItem(DOWNLOAD_TOOL_FOLDER_KEY) || "";
   }
 
-  async function ensureExternalDownloaderConfigured() {
-    if (!window.electronAPI?.checkExternalDownloader) {
+  async function ensureDownloaderAvailable() {
+    if (!window.electronAPI?.checkFfmpeg) {
       throw new Error("The desktop download bridge is unavailable.");
     }
+    const status = await window.electronAPI.checkFfmpeg();
+    if (!status?.ytDlpAvailable) {
+      throw new Error("yt-dlp.exe was not found. Place it in the app's bin folder to enable downloads.");
+    }
+    if (!status?.ffmpegAvailable) {
+      throw new Error("ffmpeg.exe was not found. Place it in the app's bin folder to enable downloads.");
+    }
+    return status;
+  }
 
-    let folder = getDownloadToolFolder();
-    let check = folder ? await window.electronAPI.checkExternalDownloader(folder) : null;
-    if (check?.exists) return check;
+  async function resolveStreamForItem(item, season, episode) {
+    const mediaType = item.media_type || "movie";
 
-    const bundled = await window.electronAPI.getBundledExternalDownloader?.();
-    if (bundled?.exists) {
-      localStorage.setItem(DOWNLOAD_TOOL_FOLDER_KEY, bundled.folderPath || "");
-      return bundled;
+    // Fast path: reuse a stream captured while the title was playing.
+    const captured = getCapturedStreamForItem(item, season, episode);
+    if (captured?.url) {
+      window.electronAPI.logDownload?.({
+        scope: "renderer",
+        message: "Using stream captured from the active player session.",
+        extra: { itemId: item.id, mediaType, season, episode, streamType: captured.streamType },
+      });
+      return { url: captured.url, headers: captured.headers || null };
     }
 
-    folder = await window.electronAPI.pickFolder();
-    if (!folder) throw new Error("No downloader folder was selected.");
-
-    localStorage.setItem(DOWNLOAD_TOOL_FOLDER_KEY, folder);
-    check = await window.electronAPI.checkExternalDownloader(folder);
-    if (!check?.exists) {
-      throw new Error("The selected folder does not contain a valid vid-dl-cli-only release.");
+    // Seamless path: resolve the embed in a hidden window without playing first.
+    const embedUrl =
+      mediaType === "tv"
+        ? tmdb.getTVEmbed(item.id, season || 1, episode || 1)
+        : tmdb.getMovieEmbed(item.id);
+    window.electronAPI.logDownload?.({
+      scope: "renderer",
+      message: "Resolving stream on demand (no warmed player session).",
+      extra: { itemId: item.id, mediaType, season, episode, embedUrl },
+    });
+    const resolved = await window.electronAPI.resolveStream(embedUrl);
+    if (!resolved?.streamUrl) {
+      throw new Error("Could not find a downloadable stream for this title.");
     }
-    return check;
+    return { url: resolved.streamUrl, headers: resolved.headers || null };
   }
 
   async function getDefaultDownloadOutputPath(item, season = null, episode = null) {
@@ -1368,38 +1387,7 @@
       return;
     }
 
-    const downloader = await ensureExternalDownloaderConfigured();
-    let resolved = null;
-    const captured = getCapturedStreamForItem(item, season, episode);
-    if (captured?.url) {
-      resolved = { streamUrl: captured.url, streamType: captured.streamType || "hls" };
-      window.electronAPI.logDownload?.({
-        scope: "renderer",
-        message: "Using stream captured from the active player session.",
-        extra: {
-          itemId: item.id,
-          mediaType,
-          season,
-          episode,
-          streamType: resolved.streamType,
-        },
-      });
-    } else {
-      window.electronAPI.logDownload?.({
-        scope: "renderer",
-        message: "No stream captured for this item. Download requires a warmed player session.",
-        extra: {
-          itemId: item.id,
-          mediaType,
-          season,
-          episode,
-        },
-      });
-      throw new Error("Play this title for a few seconds first, then press Back and download again.");
-    }
-    if (!resolved?.streamUrl) {
-      throw new Error("The source did not expose a playable stream URL.");
-    }
+    await ensureDownloaderAvailable();
 
     const outputPath = await getDefaultDownloadOutputPath(item, season, episode);
     const downloadId = crypto.randomUUID();
@@ -1420,6 +1408,7 @@
       season,
       episode,
       outputPath,
+      sourceUrl: "",
       status: "downloading",
       progress: 0,
       speed: "",
@@ -1427,30 +1416,66 @@
       totalFragments: 0,
       completedFragments: 0,
       error: "",
-      message: "Starting...",
+      message: "Finding stream…",
       startedAt: Date.now(),
     };
     entry = upsertDownloadEntry(entry);
     currentDownloadContext = { downloadId, key: entry.key };
+    window.electronAPI.registerDownloadJob?.(downloadId);
     refreshDownloadUI();
 
-    const result = await window.electronAPI.runExternalDownload({
-      downloadId,
-      binaryPath: downloader.binaryPath,
-      sourceUrl: resolved.streamUrl,
-      outputPath,
-      title,
-    });
+    try {
+      const stream = await resolveStreamForItem(item, season, episode);
+      const streamUrl = stream.url;
 
-    if (!result?.success) {
+      // Abort if the user cancelled while we were resolving.
+      const live = findDownloadEntry(item, season, episode);
+      if (!live || live.id !== downloadId || live.status === "cancelled") {
+        return;
+      }
+
       Object.assign(entry, {
-        status: "error",
-        error: result?.error || "Could not start download.",
-        message: result?.error || "Could not start download.",
+        sourceUrl: streamUrl,
+        streamHeaders: stream.headers || null,
+        message: "Starting…",
       });
       persistDownloadsManifest();
       refreshDownloadUI();
-      throw new Error(result?.error || "Could not start download.");
+
+      const result = await window.electronAPI.runYtDlpDownload({
+        downloadId,
+        sourceUrl: streamUrl,
+        outputPath,
+        referer: "https://vidsrc-embed.ru/",
+        headers: stream.headers || null,
+        title,
+      });
+
+      // Terminal state (complete/error/cancelled) is delivered via events.
+      // Only handle a hard failure that produced no error event (e.g. spawn failure).
+      if (!result?.success && !result?.cancelled) {
+        Object.assign(entry, {
+          status: "error",
+          error: result?.error || "Could not start download.",
+          message: result?.error || "Could not start download.",
+        });
+        persistDownloadsManifest();
+        refreshDownloadUI();
+        throw new Error(result?.error || "Could not start download.");
+      }
+    } catch (err) {
+      if (entry.status !== "cancelled") {
+        Object.assign(entry, {
+          status: "error",
+          error: err.message || "Download failed.",
+          message: err.message || "Download failed.",
+        });
+        persistDownloadsManifest();
+        refreshDownloadUI();
+      }
+      throw err;
+    } finally {
+      window.electronAPI.unregisterDownloadJob?.(downloadId);
     }
   }
 
