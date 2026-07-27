@@ -60,14 +60,6 @@
       </a>
     </div>
     <div class="nav-right">
-      <div class="search-container" id="search-container">
-        <button class="search-toggle" id="search-toggle">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
-          </svg>
-        </button>
-        <input type="text" class="search-input" id="search-input" placeholder="Titles, people, genres" autocomplete="off" />
-      </div>
       <div class="settings-container" id="settings-container">
         <button class="settings-toggle" id="settings-toggle" aria-label="Settings" aria-expanded="false">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.08-1.63a.5.5 0 0 0 .12-.64l-1.97-3.41a.5.5 0 0 0-.6-.22l-2.45.98a7.58 7.58 0 0 0-1.7-.98L14.54 2.5A.5.5 0 0 0 14.05 2h-4.1a.5.5 0 0 0-.49.5L9.09 5.12a7.58 7.58 0 0 0-1.7.98l-2.45-.98a.5.5 0 0 0-.6.22L2.37 8.75a.5.5 0 0 0 .12.64l2.08 1.63c-.04.32-.07.65-.07.98s.02.66.07.98l-2.08 1.63a.5.5 0 0 0-.12.64l1.97 3.41a.5.5 0 0 0 .6.22l2.45-.98c.52.4 1.09.73 1.7.98l.37 2.62a.5.5 0 0 0 .49.5h4.1a.5.5 0 0 0 .49-.5l.37-2.62c.61-.25 1.18-.58 1.7-.98l2.45.98a.5.5 0 0 0 .6-.22l1.97-3.41a.5.5 0 0 0-.12-.64l-2.08-1.63Z"/></svg>
@@ -100,6 +92,14 @@
             <div class="settings-status" id="setting-discord-status">Off</div>
           </div>
         </div>
+      </div>
+      <div class="search-container" id="search-container">
+        <button class="search-toggle" id="search-toggle">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+          </svg>
+        </button>
+        <input type="text" class="search-input" id="search-input" placeholder="Titles, people, genres" autocomplete="off" />
       </div>
     </div>
   </nav>
@@ -191,17 +191,49 @@
         </button>
         <span class="player-title" id="player-title"></span>
       </div>
-      <div class="player-header-right" id="player-episodes-toggle-container" style="display:none;">
-        <button class="player-episodes-btn" id="player-episodes-toggle">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/></svg>
-          Episodes
-        </button>
+      <div class="player-header-right">
+        <div class="player-subs-container" id="player-subs-container">
+          <button class="player-episodes-btn player-subs-btn" id="player-subs-toggle" aria-expanded="false" title="Subtitles">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 14h4M13 14h5"/><path d="M6 10.5h2M11 10.5h7"/></svg>
+            Subtitles
+          </button>
+          <div class="player-subs-panel" id="player-subs-panel" aria-hidden="true">
+            <div class="player-subs-row">
+              <span>Language</span>
+              <select class="player-subs-select" id="player-subs-language"></select>
+            </div>
+            <button class="player-subs-action" id="player-subs-search">Search subtitles</button>
+            <div class="player-subs-row" id="player-subs-enabled-row" style="display:none;">
+              <span>Show subtitles</span>
+              <span class="switch">
+                <input type="checkbox" id="player-subs-enabled" />
+                <span class="switch-track"></span>
+              </span>
+            </div>
+            <div class="player-subs-row" id="player-subs-offset-row" style="display:none;">
+              <span>Delay</span>
+              <div class="player-subs-offset">
+                <button type="button" id="player-subs-offset-down" aria-label="Subtitles earlier">−</button>
+                <span id="player-subs-offset-value">0.0s</span>
+                <button type="button" id="player-subs-offset-up" aria-label="Subtitles later">+</button>
+              </div>
+            </div>
+            <div class="player-subs-status" id="player-subs-status">No subtitles loaded.</div>
+          </div>
+        </div>
+        <div id="player-episodes-toggle-container" style="display:none;">
+          <button class="player-episodes-btn" id="player-episodes-toggle">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/></svg>
+            Episodes
+          </button>
+        </div>
       </div>
     </div>
     <div class="player-body">
       <webview class="player-webview" id="player-webview" allowfullscreen></webview>
       <video class="player-local-video" id="player-local-video" controls playsinline preload="metadata"></video>
       <div class="player-wake-layer" id="player-wake-layer" aria-hidden="true"></div>
+      <div class="player-subtitle-overlay" id="player-subtitle-overlay" aria-hidden="true"></div>
       <div class="player-episodes-panel" id="player-episodes-panel">
         <div class="player-episodes-header">
           <h3>Episodes</h3>

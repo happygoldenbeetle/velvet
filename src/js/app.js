@@ -177,6 +177,19 @@
     playerEpisodesClose: $("#player-episodes-close"),
     playerSeasonSelect: $("#player-season-select"),
     playerEpisodeList: $("#player-episode-list"),
+    subsContainer: $("#player-subs-container"),
+    subsToggle: $("#player-subs-toggle"),
+    subsPanel: $("#player-subs-panel"),
+    subsLanguage: $("#player-subs-language"),
+    subsSearch: $("#player-subs-search"),
+    subsEnabledRow: $("#player-subs-enabled-row"),
+    subsEnabled: $("#player-subs-enabled"),
+    subsOffsetRow: $("#player-subs-offset-row"),
+    subsOffsetDown: $("#player-subs-offset-down"),
+    subsOffsetUp: $("#player-subs-offset-up"),
+    subsOffsetValue: $("#player-subs-offset-value"),
+    subsStatus: $("#player-subs-status"),
+    subtitleOverlay: $("#player-subtitle-overlay"),
   };
 
   // ═══════════════════════════════════════════
@@ -376,6 +389,7 @@
     setupSettings();
     setupModal();
     setupPlayer();
+    setupSubtitles();
     setupDownloads();
     setupScroll();
     await bootstrapDownloads();
@@ -786,6 +800,19 @@
     });
 
     document.addEventListener("pointerdown", closeFromOutside);
+
+    // Ctrl/Cmd+F focuses the search directly.
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        if (els.searchContainer.classList.contains("active")) {
+          els.searchInput.focus();
+          els.searchInput.select();
+        } else {
+          openSearch();
+        }
+      }
+    });
   }
 
   function openSearch() {
@@ -1019,6 +1046,7 @@
   }
 
   function handleEmbeddedPlaybackState(payload = {}) {
+    updateSubtitleClock(payload);
     if (!activeWatchSession) return;
     const eventName = String(payload.event || "");
     const currentTime = Number(payload.currentTime);
@@ -2830,8 +2858,284 @@
   }
 
   // ═══════════════════════════════════════════
+  // SUBTITLES
+  // ═══════════════════════════════════════════
+  const SUBTITLE_LANGUAGES = [
+    ["en", "English"], ["es", "Spanish"], ["fr", "French"], ["de", "German"],
+    ["ar", "Arabic"], ["ur", "Urdu"], ["hi", "Hindi"], ["pt", "Portuguese"],
+    ["it", "Italian"], ["ru", "Russian"], ["tr", "Turkish"], ["nl", "Dutch"],
+    ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"],
+  ];
+  const SUBTITLE_RENDER_MS = 100;
+  const SUBTITLE_LANGUAGE_KEY = "velvet_subtitle_language";
+
+  let subtitleState = {
+    cues: [],
+    enabled: false,
+    offsetSeconds: 0,
+    language: localStorage.getItem(SUBTITLE_LANGUAGE_KEY) || "en",
+    loading: false,
+    lastIndex: -1,
+    context: null,
+  };
+  let subtitleTimer = null;
+  // Interpolates between the 250ms reports from the embed so cues land on time.
+  let subtitleClock = { baseTime: 0, baseAt: 0, playing: false, valid: false };
+
+  function isLocalVideoActive() {
+    return Boolean(els.playerLocalVideo && els.playerLocalVideo.style.display !== "none" && els.playerLocalVideo.getAttribute("src"));
+  }
+
+  // A downloaded file exposes its own clock directly; an embed only reports
+  // periodically, so extrapolate from the last report using a local timer.
+  function getPlaybackSeconds() {
+    if (isLocalVideoActive()) {
+      const currentTime = els.playerLocalVideo.currentTime;
+      return Number.isFinite(currentTime) ? currentTime : null;
+    }
+    if (!subtitleClock.valid) return null;
+    const drift = subtitleClock.playing ? (performance.now() - subtitleClock.baseAt) / 1000 : 0;
+    return subtitleClock.baseTime + drift;
+  }
+
+  function updateSubtitleClock(payload = {}) {
+    const currentTime = Number(payload.currentTime);
+    if (!Number.isFinite(currentTime)) return;
+    subtitleClock = {
+      baseTime: currentTime,
+      baseAt: performance.now(),
+      playing: payload.paused === false && payload.ended !== true,
+      valid: true,
+    };
+  }
+
+  // Subtitle files are community-uploaded, so the text is untrusted. Escape
+  // everything, then re-admit only the handful of inline tags SRT actually uses.
+  function renderCueText(text) {
+    return escapeHTML(text)
+      .replace(/&lt;(\/?)([biu])&gt;/g, "<$1$2>")
+      .replace(/\n/g, "<br />");
+  }
+
+  function findCueIndexAt(seconds) {
+    const cues = subtitleState.cues;
+    if (!cues.length) return -1;
+
+    // Cues are sorted, and playback is mostly monotonic — walk from the last hit
+    // rather than rescanning the whole track every 100ms.
+    let index = subtitleState.lastIndex;
+    if (index < 0 || index >= cues.length || cues[index].start > seconds) index = 0;
+    while (index < cues.length && cues[index].end <= seconds) index++;
+    if (index >= cues.length) return -1;
+    return cues[index].start <= seconds ? index : -1;
+  }
+
+  function renderSubtitleFrame() {
+    const overlay = els.subtitleOverlay;
+    if (!overlay) return;
+
+    if (!subtitleState.enabled || !subtitleState.cues.length) {
+      overlay.classList.remove("visible");
+      overlay.innerHTML = "";
+      return;
+    }
+
+    const seconds = getPlaybackSeconds();
+    if (seconds === null) {
+      overlay.classList.remove("visible");
+      return;
+    }
+
+    const index = findCueIndexAt(seconds + subtitleState.offsetSeconds);
+    if (index === subtitleState.lastIndex && overlay.classList.contains("visible") === (index !== -1)) return;
+    subtitleState.lastIndex = index;
+
+    if (index === -1) {
+      overlay.classList.remove("visible");
+      overlay.innerHTML = "";
+      return;
+    }
+
+    overlay.innerHTML = `<span class="player-subtitle-cue">${renderCueText(subtitleState.cues[index].text)}</span>`;
+    overlay.classList.add("visible");
+  }
+
+  function startSubtitleRenderLoop() {
+    if (subtitleTimer) return;
+    subtitleTimer = setInterval(renderSubtitleFrame, SUBTITLE_RENDER_MS);
+  }
+
+  function stopSubtitleRenderLoop() {
+    if (!subtitleTimer) return;
+    clearInterval(subtitleTimer);
+    subtitleTimer = null;
+  }
+
+  function setSubtitleStatus(message) {
+    if (els.subsStatus) els.subsStatus.textContent = message;
+  }
+
+  function syncSubtitleControls() {
+    const hasCues = subtitleState.cues.length > 0;
+    if (els.subsEnabledRow) els.subsEnabledRow.style.display = hasCues ? "" : "none";
+    if (els.subsOffsetRow) els.subsOffsetRow.style.display = hasCues ? "" : "none";
+    if (els.subsEnabled) els.subsEnabled.checked = subtitleState.enabled;
+    if (els.subsOffsetValue) els.subsOffsetValue.textContent = `${subtitleState.offsetSeconds > 0 ? "+" : ""}${subtitleState.offsetSeconds.toFixed(1)}s`;
+    if (els.subsSearch) els.subsSearch.disabled = subtitleState.loading;
+    els.subsToggle?.classList.toggle("active", subtitleState.enabled && hasCues);
+  }
+
+  function resetSubtitles(context = null) {
+    subtitleState = {
+      ...subtitleState,
+      cues: [],
+      enabled: false,
+      offsetSeconds: 0,
+      loading: false,
+      lastIndex: -1,
+      context,
+    };
+    subtitleClock = { baseTime: 0, baseAt: 0, playing: false, valid: false };
+    if (els.subtitleOverlay) {
+      els.subtitleOverlay.classList.remove("visible");
+      els.subtitleOverlay.innerHTML = "";
+    }
+    els.subsContainer?.classList.remove("open");
+    els.subsToggle?.setAttribute("aria-expanded", "false");
+    els.subsPanel?.setAttribute("aria-hidden", "true");
+    setSubtitleStatus(context ? "No subtitles loaded." : "Nothing is playing.");
+    syncSubtitleControls();
+  }
+
+  // The item in a watch session may be a lightweight card object without
+  // external_ids; fall back to a details lookup so TV/movie both resolve.
+  async function resolveImdbIdForSubtitles(context) {
+    const direct = context?.item?.external_ids?.imdb_id;
+    if (direct) return direct;
+    const id = context?.item?.id ?? context?.tmdbId;
+    const mediaType = context?.item?.media_type || context?.media_type || "movie";
+    if (!id || mediaType === "manga") return "";
+    try {
+      const details = mediaType === "tv" ? await tmdb.tvDetails(id) : await tmdb.movieDetails(id);
+      return details?.external_ids?.imdb_id || "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function loadSubtitlesForPlayback() {
+    const context = subtitleState.context;
+    if (!context) {
+      setSubtitleStatus("Nothing is playing.");
+      return;
+    }
+    if (!window.electronAPI?.fetchSubtitles) {
+      setSubtitleStatus("The subtitle bridge is unavailable.");
+      return;
+    }
+
+    subtitleState.loading = true;
+    syncSubtitleControls();
+    setSubtitleStatus("Searching OpenSubtitles…");
+
+    try {
+      const imdbId = await resolveImdbIdForSubtitles(context);
+      const result = await window.electronAPI.fetchSubtitles({
+        imdbId,
+        query: imdbId ? "" : context.title || "",
+        season: context.season || null,
+        episode: context.episode || null,
+        language: subtitleState.language,
+      });
+
+      if (!result?.success) {
+        setSubtitleStatus(result?.error || "Could not load subtitles.");
+        return;
+      }
+
+      subtitleState.cues = result.cues || [];
+      subtitleState.lastIndex = -1;
+      subtitleState.enabled = subtitleState.cues.length > 0;
+
+      const quota = Number.isFinite(result.remaining) ? ` · ${result.remaining} downloads left today` : "";
+      setSubtitleStatus(
+        result.cached
+          ? `${subtitleState.cues.length} cues loaded from cache.`
+          : `${subtitleState.cues.length} cues loaded.${quota}`
+      );
+      renderSubtitleFrame();
+    } catch (err) {
+      setSubtitleStatus(err.message || "Could not load subtitles.");
+    } finally {
+      subtitleState.loading = false;
+      syncSubtitleControls();
+    }
+  }
+
+  function setupSubtitles() {
+    if (!els.subsToggle || !els.subsPanel) return;
+
+    els.subsLanguage.innerHTML = SUBTITLE_LANGUAGES
+      .map(([code, label]) => `<option value="${code}">${label}</option>`)
+      .join("");
+    els.subsLanguage.value = subtitleState.language;
+
+    els.subsToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const isOpen = els.subsContainer.classList.toggle("open");
+      els.subsToggle.setAttribute("aria-expanded", String(isOpen));
+      els.subsPanel.setAttribute("aria-hidden", String(!isOpen));
+      showPlayerChrome(!isOpen);
+    });
+
+    els.subsPanel.addEventListener("click", (event) => event.stopPropagation());
+
+    els.subsLanguage.addEventListener("change", () => {
+      subtitleState.language = els.subsLanguage.value;
+      localStorage.setItem(SUBTITLE_LANGUAGE_KEY, subtitleState.language);
+      subtitleState.cues = [];
+      subtitleState.enabled = false;
+      subtitleState.lastIndex = -1;
+      renderSubtitleFrame();
+      syncSubtitleControls();
+      setSubtitleStatus("Language changed — search again.");
+    });
+
+    els.subsSearch.addEventListener("click", () => loadSubtitlesForPlayback());
+
+    els.subsEnabled?.addEventListener("change", () => {
+      subtitleState.enabled = els.subsEnabled.checked;
+      subtitleState.lastIndex = -1;
+      renderSubtitleFrame();
+      syncSubtitleControls();
+    });
+
+    const nudgeOffset = (delta) => {
+      subtitleState.offsetSeconds = Math.round((subtitleState.offsetSeconds + delta) * 10) / 10;
+      subtitleState.lastIndex = -1;
+      renderSubtitleFrame();
+      syncSubtitleControls();
+    };
+    els.subsOffsetDown?.addEventListener("click", () => nudgeOffset(-0.5));
+    els.subsOffsetUp?.addEventListener("click", () => nudgeOffset(0.5));
+
+    document.addEventListener("pointerdown", (event) => {
+      if (!els.subsContainer?.classList.contains("open")) return;
+      if (els.subsContainer.contains(event.target)) return;
+      els.subsContainer.classList.remove("open");
+      els.subsToggle.setAttribute("aria-expanded", "false");
+      els.subsPanel.setAttribute("aria-hidden", "true");
+    });
+
+    syncSubtitleControls();
+  }
+
+  // ═══════════════════════════════════════════
   // PLAYER
   // ═══════════════════════════════════════════
+  // Long enough that a deliberate move-then-click never races the hide timer.
+  const PLAYER_CHROME_HIDE_MS = 3000;
+
   function clearPlayerChromeTimer() {
     if (playerChromeTimer) {
       clearTimeout(playerChromeTimer);
@@ -2847,7 +3151,7 @@
       if (els.playerOverlay.style.display === "flex" && !els.playerEpisodesPanel.classList.contains("open")) {
         els.playerOverlay.classList.add("chrome-hidden");
       }
-    }, 1500);
+    }, PLAYER_CHROME_HIDE_MS);
   }
 
   function clearPlayerLoadTimer() {
@@ -2938,6 +3242,8 @@
       paused: true,
       force: true,
     });
+    resetSubtitles({ item: tvItem, season, episode, title });
+    startSubtitleRenderLoop();
     els.playerWebview.setAttribute("src", tmdb.getTVEmbed(tvItem.id, season, episode, resume));
     syncActivePlayerEpisode();
     updatePlayerNavButtons();
@@ -3027,6 +3333,8 @@
       title,
       startTime,
     });
+    resetSubtitles({ item, season: currentSeason, episode: currentEpisode, title });
+    startSubtitleRenderLoop();
     updateDiscordActivity(item, {
       title,
       season: currentSeason,
@@ -3088,6 +3396,15 @@
       paused: true,
       force: true,
     });
+    resetSubtitles({
+      item: { id: downloadEntry?.tmdbId, media_type: downloadEntry?.media_type || "movie" },
+      tmdbId: downloadEntry?.tmdbId,
+      media_type: downloadEntry?.media_type,
+      season: downloadEntry?.season || null,
+      episode: downloadEntry?.episode || null,
+      title: title || "",
+    });
+    startSubtitleRenderLoop();
     els.playerWebview.setAttribute("src", "about:blank");
     els.playerWebview.style.display = "none";
     if (els.playerLocalVideo) {
@@ -3195,6 +3512,8 @@
   function closePlayer() {
     stopWatchSession(true);
     localDiscordContext = null;
+    stopSubtitleRenderLoop();
+    resetSubtitles(null);
     clearPlayerChromeTimer();
     hidePlayerStatus();
     els.playerOverlay.style.display = "none";

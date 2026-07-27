@@ -249,6 +249,7 @@ body.hero-top-fade-off .navbar:not(.scrolled) {
   display: flex;
   align-items: center;
   gap: 7px;
+  cursor: pointer;
 }
 
 .nav-link:hover {
@@ -294,6 +295,7 @@ body.hero-top-fade-off .navbar:not(.scrolled) {
   color: var(--text-primary);
   transition: var(--transition);
   border-radius: 50%;
+  cursor: pointer;
 }
 
 .settings-toggle:hover,
@@ -584,6 +586,7 @@ body.navbar-style-pill .search-container.active .search-input:focus {
   color: var(--text-primary);
   transition: var(--transition);
   border-radius: 50%;
+  cursor: pointer;
 }
 
 .search-toggle:hover {
@@ -1776,9 +1779,15 @@ body.hero-top-fade-off .hero-gradient {
   object-fit: contain;
 }
 
+/* Only spans the header strip, never the video surface. A full-bleed layer would
+   swallow the first click on the player (and on a local video's control bar),
+   because arming it for pointer detection also makes it eat clicks. */
 .player-wake-layer {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 140px;
   z-index: 14;
   background: transparent;
   opacity: 0;
@@ -1788,6 +1797,144 @@ body.hero-top-fade-off .hero-gradient {
 .player-overlay.chrome-hidden .player-wake-layer {
   pointer-events: auto;
   cursor: default;
+}
+
+/* ── Subtitles ── */
+.player-subs-container {
+  position: relative;
+}
+
+.player-subs-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 260px;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(16, 16, 20, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px);
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+  z-index: 30;
+}
+
+.player-subs-container.open .player-subs-panel {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.player-subs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.player-subs-select {
+  flex: 1;
+  max-width: 130px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--white);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 13px;
+}
+
+.player-subs-action {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--white);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.player-subs-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.player-subs-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.player-subs-offset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player-subs-offset button {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--white);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.player-subs-offset button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.player-subs-offset span {
+  min-width: 42px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.player-subs-status {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* Sits above the webview but below the header and side panels. Click-through so
+   it can never intercept a play/pause the way the wake layer used to. */
+.player-subtitle-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 7%;
+  transform: translateX(-50%);
+  z-index: 16;
+  max-width: 82%;
+  text-align: center;
+  pointer-events: none;
+  display: none;
+}
+
+.player-subtitle-overlay.visible {
+  display: block;
+}
+
+.player-subtitle-cue {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: clamp(17px, 2.3vw, 30px);
+  font-weight: 500;
+  line-height: 1.35;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
+  white-space: pre-wrap;
 }
 
 .player-status-overlay {

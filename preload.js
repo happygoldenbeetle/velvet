@@ -68,6 +68,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   saveDownloads: (manifest) => ipcRenderer.invoke("downloads-save", manifest),
   deleteDownload: (entry) => ipcRenderer.invoke("download-delete", entry),
 
+  // ── Subtitles ──
+  fetchSubtitles: (options) => ipcRenderer.invoke("subtitles-fetch", options),
+  getSubtitleConfig: () => ipcRenderer.invoke("subtitles-get-config"),
+  setSubtitleApiKey: (apiKey) => ipcRenderer.invoke("subtitles-set-api-key", apiKey),
+
   // ── Downloads: utility ──
   getDownloadsDir: () => ipcRenderer.invoke("downloads-get-dir"),
   getDownloadsLogPath: () => ipcRenderer.invoke("downloads-get-log-path"),

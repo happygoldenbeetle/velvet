@@ -149,55 +149,42 @@ const PLAYER_WATERMARK_SCRIPT = `
   })();
 `;
 
-const PLAYER_STATE_PREFIX = "__VELVET_PLAYER_STATE__";
+// Installs a state *getter* rather than a console-based emitter. The <video> on
+// these embeds lives in a nested cross-origin (out-of-process) iframe, so a
+// top-frame-only script never finds it, and console messages from an OOPIF are
+// not reliably surfaced on the host webContents. Injecting this into every frame
+// and polling the one that reports a video works regardless of frame topology.
+// Evaluates to true when this frame owns a <video>, which is how the frame scan
+// identifies the player frame.
 const PLAYER_STATE_SCRIPT = `
   (() => {
-    if (window.__velvetPlaybackMonitorInstalled) return;
-    window.__velvetPlaybackMonitorInstalled = true;
-    const prefix = ${JSON.stringify("__VELVET_PLAYER_STATE__")};
-    let currentVideo = null;
-    let lastPayload = "";
-    let lastEmitAt = 0;
-    let lastTimeupdateAt = 0;
-
-    const emit = (eventName, video) => {
-      if (!video) return;
-      const now = Date.now();
-      if (eventName === "timeupdate" && now - lastTimeupdateAt < 4000) return;
-      if (eventName === "timeupdate") lastTimeupdateAt = now;
-
-      const payload = {
-        event: eventName,
-        currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
-        duration: Number.isFinite(video.duration) ? video.duration : 0,
-        paused: Boolean(video.paused),
-        ended: Boolean(video.ended),
-        readyState: video.readyState || 0,
+    if (!window.__velvetPlayerStateInstalled) {
+      window.__velvetPlayerStateInstalled = true;
+      window.__velvetPlayerState = () => {
+        const video = document.querySelector("video");
+        if (!video) return null;
+        return {
+          currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+          duration: Number.isFinite(video.duration) ? video.duration : 0,
+          paused: Boolean(video.paused),
+          ended: Boolean(video.ended),
+          readyState: video.readyState || 0,
+        };
       };
-      const serialized = JSON.stringify(payload);
-      if (serialized === lastPayload && now - lastEmitAt < 1000) return;
-      lastPayload = serialized;
-      lastEmitAt = now;
-      console.log(prefix + serialized);
-    };
-
-    const attach = (video) => {
-      if (!video || video === currentVideo) return;
-      currentVideo = video;
-      ["playing", "play", "pause", "waiting", "seeked", "seeking", "ended", "loadedmetadata", "canplay", "timeupdate"].forEach((eventName) => {
-        video.addEventListener(eventName, () => emit(eventName, video), { passive: true });
-      });
-      emit(video.paused ? "pause" : "playing", video);
-    };
-
-    const scan = () => attach(document.querySelector("video"));
-    scan();
-    setInterval(scan, 1000);
+    }
+    return Boolean(window.__velvetPlayerState());
   })();
 `;
 
+// Poll fast enough to drive subtitle cue timing; rescan for the player frame far
+// less often, since that only changes on navigation.
+const PLAYER_STATE_POLL_MS = 250;
+const PLAYER_FRAME_SCAN_TICKS = 8;
+
 let mainWindow;
 const playerWebContentsIds = new Set();
+// webContents id -> interval timer polling that guest's player frame for playback state.
+const playerStateTrackers = new Map();
 // Active stream resolvers keyed by their hidden window's webContents id.
 // Populated during download-resolve-stream so the session-level webRequest hook
 // (which, unlike CDP, sees out-of-process iframe requests) can surface the media URL.
@@ -540,6 +527,102 @@ function captureResolverMediaRequest(details) {
   waiter(details.url, isHls ? "hls" : "mp4", headers);
 }
 
+// Every frame in the guest, including out-of-process iframes.
+function collectFrames(webContents) {
+  try {
+    const rootFrame = webContents.mainFrame;
+    if (!rootFrame) return [];
+    const subtree = rootFrame.framesInSubtree || [];
+    return subtree.length ? subtree : [rootFrame];
+  } catch {
+    return [];
+  }
+}
+
+// Injects the state getter into every frame and returns the one that owns a <video>.
+async function findPlayerVideoFrame(webContents) {
+  for (const frame of collectFrames(webContents)) {
+    try {
+      if (await frame.executeJavaScript(PLAYER_STATE_SCRIPT, true)) return frame;
+    } catch {}
+  }
+  return null;
+}
+
+function stopPlayerStateTracking(webContentsId) {
+  const timer = playerStateTrackers.get(webContentsId);
+  if (!timer) return;
+  clearInterval(timer);
+  playerStateTrackers.delete(webContentsId);
+}
+
+function startPlayerStateTracking(guestContents) {
+  stopPlayerStateTracking(guestContents.id);
+
+  let videoFrame = null;
+  let tickCount = 0;
+  let busy = false;
+  let lastPaused = null;
+  let lastEnded = false;
+  let lastCurrentTime = null;
+
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      if (guestContents.isDestroyed()) {
+        stopPlayerStateTracking(guestContents.id);
+        return;
+      }
+      // Nothing to track while the player is parked on about:blank.
+      if (String(guestContents.getURL() || "").startsWith("about:")) {
+        videoFrame = null;
+        return;
+      }
+
+      if (!videoFrame) {
+        // Rescan only every Nth tick — walking every frame is comparatively costly.
+        if (tickCount++ % PLAYER_FRAME_SCAN_TICKS !== 0) return;
+        videoFrame = await findPlayerVideoFrame(guestContents);
+        if (!videoFrame) return;
+        logDownload("player", "Found the frame that owns the video element.", { url: videoFrame.url });
+      }
+
+      let state = null;
+      try {
+        state = await videoFrame.executeJavaScript("window.__velvetPlayerState?.() ?? null", true);
+      } catch {
+        // Frame navigated away or was destroyed — fall back to scanning.
+        videoFrame = null;
+        return;
+      }
+      if (!state) {
+        videoFrame = null;
+        return;
+      }
+
+      // Synthesize the event name the renderer keys its Discord sync off of.
+      let eventName = "timeupdate";
+      if (state.ended && !lastEnded) eventName = "ended";
+      else if (lastPaused !== null && state.paused !== lastPaused) eventName = state.paused ? "pause" : "playing";
+      else if (lastPaused === null) eventName = state.paused ? "pause" : "playing";
+      else if (lastCurrentTime !== null && Math.abs(state.currentTime - lastCurrentTime) > 2) eventName = "seeked";
+
+      lastPaused = state.paused;
+      lastEnded = state.ended;
+      lastCurrentTime = state.currentTime;
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("player-playback-state", { event: eventName, ...state });
+      }
+    } finally {
+      busy = false;
+    }
+  };
+
+  playerStateTrackers.set(guestContents.id, setInterval(tick, PLAYER_STATE_POLL_MS));
+}
+
 function attachFullscreenShortcut(webContents, options = {}) {
   webContents.on("before-input-event", (event, input) => {
     if (!mainWindow) return;
@@ -663,18 +746,13 @@ function createWindow() {
     playerWebContentsIds.add(guestContents.id);
     guestContents.once("destroyed", () => {
       playerWebContentsIds.delete(guestContents.id);
+      stopPlayerStateTracking(guestContents.id);
     });
 
     attachFullscreenShortcut(guestContents, { syncVideoFullscreenKeys: true });
     attachHtmlFullscreenBridge(guestContents);
     guestContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    guestContents.on("console-message", (_event, _level, message) => {
-      if (!mainWindow || mainWindow.isDestroyed()) return;
-      if (typeof message !== "string" || !message.startsWith(PLAYER_STATE_PREFIX)) return;
-      try {
-        mainWindow.webContents.send("player-playback-state", JSON.parse(message.slice(PLAYER_STATE_PREFIX.length)));
-      } catch {}
-    });
+    startPlayerStateTracking(guestContents);
 
     guestContents.on("will-navigate", (details) => {
       if (!isAllowedPlayerUrl(details.url)) {
@@ -685,7 +763,8 @@ function createWindow() {
     guestContents.on("dom-ready", () => {
       guestContents.insertCSS(PLAYER_WATERMARK_CSS).catch(() => {});
       guestContents.executeJavaScript(PLAYER_WATERMARK_SCRIPT).catch(() => {});
-      guestContents.executeJavaScript(PLAYER_STATE_SCRIPT).catch(() => {});
+      // The state getter is injected per-frame by the tracker's scan, not here —
+      // this only runs in the top frame, which is not where the <video> lives.
     });
   });
 }
@@ -2204,6 +2283,12 @@ ipcMain.handle("download-run-ytdlp", async (event, { downloadId, sourceUrl, outp
       "--continue",
       "--no-overwrites",
       "--no-playlist",
+      // Write any subtitle tracks the source exposes as .vtt sidecars next to the
+      // video; getSubtitleForVideo() picks them up automatically on playback.
+      // A no-op when the stream carries no subtitles.
+      "--write-subs",
+      "--sub-langs", "en.*,en",
+      "--convert-subs", "vtt",
       "--ffmpeg-location", ffmpegPath,
       "--progress-template", "download:DL:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.eta)s|%(progress.speed)s|%(progress.status)s|%(progress.fragment_index)s|%(progress.fragment_count)s",
       "--progress-template", "postprocess:PP:%(progress.status)s|%(progress.postprocessor)s",
@@ -2589,6 +2674,263 @@ ipcMain.on("downloads-log", (_event, payload = {}) => {
   const message = payload.message || "Renderer log";
   const extra = payload.extra ?? null;
   appendDownloadLog(level, scope, message, extra);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// SUBTITLES — OpenSubtitles client
+// ══════════════════════════════════════════════════════════════════════════
+const OPENSUBTITLES_BASE = "https://api.opensubtitles.com/api/v1";
+const OPENSUBTITLES_UA = "Velvet v1.0.0";
+
+// Lives in userData, never in the repo — this project pushes to GitHub, and a key
+// committed to source is a key published. safeStorage is reserved for the account
+// password if/when login is added; a bare API key is stored as-is so the file
+// stays inspectable.
+function getSubtitleConfigPath() {
+  return path.join(app.getPath("userData"), "subtitles.json");
+}
+
+function readSubtitleConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(getSubtitleConfigPath(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeSubtitleConfig(patch = {}) {
+  try {
+    const next = { ...readSubtitleConfig(), ...patch };
+    fs.mkdirSync(path.dirname(getSubtitleConfigPath()), { recursive: true });
+    fs.writeFileSync(getSubtitleConfigPath(), JSON.stringify(next, null, 2), "utf8");
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// TMDB hands back "tt0137523"; the API 301s anything that isn't the bare number.
+function normalizeImdbId(raw) {
+  const digits = String(raw || "").replace(/^tt/i, "").replace(/^0+/, "");
+  return /^\d+$/.test(digits) ? digits : "";
+}
+
+async function openSubtitlesRequest(pathname, { method = "GET", query = {}, body = null } = {}) {
+  const { apiKey, token } = readSubtitleConfig();
+  if (!apiKey) throw new Error("No OpenSubtitles API key is configured.");
+
+  const url = new NodeURL(`${OPENSUBTITLES_BASE}${pathname}`);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, value);
+  });
+
+  const headers = {
+    "Api-Key": apiKey,
+    "User-Agent": OPENSUBTITLES_UA,
+    "Accept": "application/json",
+  };
+  if (body) headers["Content-Type"] = "application/json";
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(url.toString(), {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("OpenSubtitles rejected the API key.");
+  }
+  if (response.status === 406 || response.status === 429) {
+    throw new Error("The OpenSubtitles daily download quota is exhausted. It resets at 00:00 UTC.");
+  }
+  if (!response.ok) {
+    throw new Error(`OpenSubtitles error: ${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// Prefer human translations over machine ones, plain over hearing-impaired, then
+// whatever the community downloads most — a decent proxy for sync quality.
+function pickBestSubtitle(results = []) {
+  return [...results]
+    .filter((entry) => (entry?.attributes?.files || []).length > 0)
+    .sort((a, b) => {
+      const attrA = a.attributes;
+      const attrB = b.attributes;
+      const score = (attr) =>
+        (attr.ai_translated ? 2 : 0) +
+        (attr.machine_translated ? 2 : 0) +
+        (attr.hearing_impaired ? 1 : 0);
+      const diff = score(attrA) - score(attrB);
+      if (diff !== 0) return diff;
+      return (attrB.download_count || 0) - (attrA.download_count || 0);
+    })[0] || null;
+}
+
+// Community subtitle files routinely bookend the track with promo cues. Matching
+// on URLs and known site names keeps this from touching real dialogue.
+const SUBTITLE_PROMO_PATTERNS = [
+  /\bwww\.\w/i,
+  /https?:\/\//i,
+  /\b(opensubtitles|podnapisi|subscene|addic7ed|yify|subdl)\b/i,
+  /\bsubtitles?\s+(by|from|downloaded)\b/i,
+  /\bsync(ed)?\s+and\s+corrected\b/i,
+];
+
+function isPromoCue(text) {
+  return SUBTITLE_PROMO_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function srtTimeToSeconds(stamp) {
+  const match = String(stamp).trim().match(/(\d+):(\d{2}):(\d{2})[,.](\d{1,3})/);
+  if (!match) return null;
+  return (
+    Number(match[1]) * 3600 +
+    Number(match[2]) * 60 +
+    Number(match[3]) +
+    Number(match[4].padEnd(3, "0")) / 1000
+  );
+}
+
+// Parses SRT straight to cues. Deliberately does not reuse convertSrtToVtt(): its
+// /^\d+\n/gm index stripper also deletes dialogue lines that are purely digits,
+// and the overlay needs structured cues rather than a VTT blob anyway.
+function parseSrtCues(srtText) {
+  const normalized = String(srtText || "").replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const cues = [];
+
+  for (const block of normalized.split(/\n{2,}/)) {
+    const lines = block.split("\n").filter((line) => line.trim() !== "");
+    if (!lines.length) continue;
+
+    // Drop a leading cue index only when the very next line is a timing line.
+    const timingIndex = /^\d+$/.test(lines[0].trim()) && lines[1]?.includes("-->") ? 1 : 0;
+    const timing = lines[timingIndex] || "";
+    if (!timing.includes("-->")) continue;
+
+    const [rawStart, rawEnd] = timing.split("-->");
+    const start = srtTimeToSeconds(rawStart);
+    const end = srtTimeToSeconds(rawEnd);
+    if (start === null || end === null || end <= start) continue;
+
+    const text = lines
+      .slice(timingIndex + 1)
+      .join("\n")
+      .replace(/<(\/?)([bius])>/gi, (_match, slash, tag) => `<${slash}${tag.toLowerCase()}>`)
+      .replace(/\{\\[^}]*\}/g, "")
+      .trim();
+    if (!text) continue;
+
+    cues.push({ start, end, text });
+  }
+
+  return cues.filter((cue) => !isPromoCue(cue.text)).sort((a, b) => a.start - b.start);
+}
+
+function getSubtitleCacheDir() {
+  return path.join(getVelvetVideosDir(), ".subtitles", "opensubtitles");
+}
+
+function getSubtitleCacheKey({ imdbId, season, episode, language }) {
+  const episodePart = season && episode
+    ? `-s${String(season).padStart(2, "0")}e${String(episode).padStart(2, "0")}`
+    : "";
+  return `${imdbId}${episodePart}-${language}`;
+}
+
+// Cached hits cost zero quota, which matters enormously on 5 downloads/day.
+ipcMain.handle("subtitles-fetch", async (_event, options = {}) => {
+  try {
+    const language = String(options.language || "en").toLowerCase();
+    const imdbId = normalizeImdbId(options.imdbId);
+    const season = options.season || null;
+    const episode = options.episode || null;
+
+    if (!imdbId && !options.query) {
+      return { success: false, error: "No IMDb id or title was available to search with." };
+    }
+
+    const cacheKey = getSubtitleCacheKey({ imdbId: imdbId || "q", season, episode, language });
+    const cacheDir = getSubtitleCacheDir();
+    const cachedSrtPath = path.join(cacheDir, `${cacheKey}.srt`);
+
+    if (fs.existsSync(cachedSrtPath)) {
+      const cues = parseSrtCues(fs.readFileSync(cachedSrtPath, "utf8"));
+      logDownload("subtitles", "Served subtitles from cache.", { cacheKey, cues: cues.length });
+      return { success: true, cues, language, cached: true };
+    }
+
+    const search = await openSubtitlesRequest("/subtitles", {
+      query: {
+        imdb_id: imdbId || undefined,
+        query: imdbId ? undefined : options.query,
+        season_number: season || undefined,
+        episode_number: episode || undefined,
+        languages: language,
+      },
+    });
+
+    const best = pickBestSubtitle(search.data || []);
+    const fileId = best?.attributes?.files?.[0]?.file_id;
+    if (!fileId) {
+      return { success: false, error: `No ${language.toUpperCase()} subtitles were found for this title.` };
+    }
+
+    const download = await openSubtitlesRequest("/download", {
+      method: "POST",
+      body: { file_id: fileId },
+    });
+    if (!download?.link) {
+      return { success: false, error: download?.message || "OpenSubtitles did not return a download link." };
+    }
+
+    const fileResponse = await fetch(download.link, {
+      headers: { "User-Agent": OPENSUBTITLES_UA },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!fileResponse.ok) {
+      return { success: false, error: `Could not fetch the subtitle file (HTTP ${fileResponse.status}).` };
+    }
+    const srtText = await fileResponse.text();
+
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(cachedSrtPath, srtText, "utf8");
+    // Sidecar VTT so the local-file <track> path can use the same cache.
+    fs.writeFileSync(path.join(cacheDir, `${cacheKey}.vtt`), convertSrtToVtt(srtText), "utf8");
+
+    const cues = parseSrtCues(srtText);
+    logDownload("subtitles", "Downloaded subtitles.", {
+      cacheKey,
+      fileId,
+      cues: cues.length,
+      remaining: download.remaining,
+      release: best?.attributes?.release || "",
+    });
+
+    return {
+      success: true,
+      cues,
+      language,
+      cached: false,
+      remaining: download.remaining ?? null,
+      release: best?.attributes?.release || "",
+    };
+  } catch (err) {
+    errorDownload("subtitles", "Subtitle fetch failed.", { error: err.message });
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("subtitles-get-config", () => {
+  const { apiKey, token } = readSubtitleConfig();
+  // Never hand the raw key back to the renderer.
+  return { configured: Boolean(apiKey), signedIn: Boolean(token) };
+});
+
+ipcMain.handle("subtitles-set-api-key", (_event, apiKey) => {
+  return writeSubtitleConfig({ apiKey: String(apiKey || "").trim() });
 });
 
 // ──────────────────────────────────────────────
